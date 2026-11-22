@@ -1,7 +1,7 @@
 #include "PluginEditor.h"
 
 // ===== EffectCard =====
-EffectCard::EffectCard(EffectBase& fx, NebulaAudioProcessor& proc) : effect(fx)
+EffectCard::EffectCard(EffectBase& fx, NebulaAudioProcessor& /*proc*/) : effect(fx)
 {
     nameLabel.setText(effect.getDisplayName(), juce::dontSendNotification);
     nameLabel.setFont(juce::Font(juce::FontOptions(14.0f, juce::Font::bold)));
@@ -92,7 +92,6 @@ NebulaAudioProcessorEditor::NebulaAudioProcessorEditor(NebulaAudioProcessor& p)
     generateBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xFF00E5FF).withAlpha(0.3f));
     generateBtn.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFF00E5FF));
     generateBtn.onClick = [this]() {
-        // Простейшая "AI" генерация: парсинг ключевых слов
         auto text = aiInput.getText().toLowerCase();
         if (text.contains("space") || text.contains("reverb")) proc.rack.addEffect("reverb");
         if (text.contains("echo") || text.contains("delay")) proc.rack.addEffect("delay");
