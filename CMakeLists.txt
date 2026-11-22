@@ -30,6 +30,12 @@ target_sources(NebulaMultiFX PRIVATE
     PresetManager.h
     PresetBar.cpp
     PresetBar.h
+    NebulaLookAndFeel.cpp
+    NebulaLookAndFeel.h
+    ReelComponent.cpp
+    ReelComponent.h
+    SpectrumDisplay.cpp
+    SpectrumDisplay.h
 )
 
 target_compile_features(NebulaMultiFX PRIVATE cxx_std_17)
