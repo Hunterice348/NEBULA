@@ -1,28 +1,32 @@
-# DSP modules
+# NEBULA DSP inventory and concurrency notes
 
-> Current implementation inventory. Planned effects are not implementations.
+> Inventory at current implementation. Planned modules are not implemented effects.
 
 ## Registered effects
 
-| ID | Parameters (normalized unless stated) | Processing |
-|---|---|---|
-| `reverb` | Size, Decay, Damp, Mix | JUCE `dsp::Reverb`; decay now maps monotonically to the algorithm's room-size control (JUCE's algorithm has no independent T60 parameter). |
-| `delay` | Time (0–1, up to 2 s), Feedback (0–1 clamped to 0.95) | Preallocated two-second delay lines; mono now uses the left line and stereo uses independent lines. |
-| `distortion` | Drive, Tone | `tanh` waveshaping followed by per-channel low-pass filtering. |
-| `chorus` | Rate, Depth | JUCE `dsp::Chorus`. |
-| `phaser` | Rate, Depth, Feedback | JUCE `dsp::Phaser`; feedback is bounded below unity. |
-| `compressor` | Threshold, Ratio, Attack | JUCE `dsp::Compressor`; release remains fixed at 100 ms. |
-| `bitcrusher` | Bits (2–16), Rate (1–32 hold factor) | Quantizer and sample hold; phase and held sample persist across process calls per channel. |
-| `filter` | Cutoff (20 Hz to 0.45 × sample rate), Resonance (bounded) | JUCE TPT low-pass filter. |
+| ID | DSP | Parameters | Concurrency status |
+|---|---|---|---|
+| `reverb` | JUCE `dsp::Reverb`; decay maps into room-size range | Size, Decay, Damp; mix/on | Ordinary effect fields and JUCE setter may race UI edits. |
+| `delay` | Preallocated two-second ring delay; mono left-line, stereo dual-line | Time, Feedback; mix/on | Ordinary time/feedback fields can race. |
+| `distortion` | tanh saturation + low-pass filtering | Drive, Tone; mix/on | Tone coefficient replacement is not synchronized with DSP; unsafe concurrent parameter update. |
+| `chorus` | JUCE `dsp::Chorus` | Rate, Depth; mix/on | Fields and JUCE setter calls need audio-thread ownership. |
+| `phaser` | JUCE `dsp::Phaser`, feedback bounded below unity | Rate, Depth, Feedback; mix/on | Fields and JUCE setter calls need audio-thread ownership. |
+| `compressor` | JUCE `dsp::Compressor`; fixed 100 ms release | Threshold, Ratio, Attack; mix/on | Fields and setter calls need audio-thread ownership. |
+| `bitcrusher` | Quantization + persistent per-channel sample hold | Bits, Rate; mix/on | Ordinary controls can race despite audio-owned hold state. |
+| `filter` | JUCE TPT low-pass with bounded resonance | Cutoff, Resonance; mix/on | Fields and JUCE setter calls need audio-thread ownership. |
 
-Legacy effect IDs and indexed `pN` ValueTree properties are preserved. The base wet/dry buffer is allocated by `prepare`, not resized in `EffectBase::process`; a block exceeding prepared buffer capacity passes through the affected effect unchanged until re-preparation.
+Legacy IDs and `on`, `mix`, indexed `pN` state remain the compatibility format. The base class preallocates its wet/dry buffer during `prepare`; oversized input is bypassed by that effect rather than causing buffer resize.
 
-## Limitations and safety status
+## Concurrency warning
 
-This change does **not** make the live rack architecture thread-safe. Rack replacement, effect parameter fields, distortion coefficient updates, JUCE DSP setter calls, UI-held effect references and spectrum transfer still need a separately designed ownership/communication solution. Atomic enable/mix values do not make all other effect controls safe for concurrent UI/audio access. Rack add/remove/preset loading must not be used concurrently with audio until that work is implemented and tested.
+Atomic enable/mix controls do not make an effect or rack thread-safe. The current UI retains `EffectBase&`; rack and preset methods can destroy effects while `processBlock` traverses them. Per-effect parameter fields are ordinary floats, and some setters mutate JUCE DSP processors. These hazards remain. See `RUNTIME_OWNERSHIP.md` for the audit and selected design.
 
-No new effects are registered by this change. Multiband compression, transient shaping, tape, granular, spectral, frequency-shift, convolution and modulation systems remain unimplemented.
+The spectrum analyzer now uses a bounded fixed-record SPSC queue with a single audio producer and single UI consumer. When full, it drops the newest frame; no slot is overwritten while being read. This does not support concurrent multiple editor consumers.
 
-## Verification status
+## Not implemented
 
-No build or DSP test execution was available for this source update. The implementation is not claimed compiled or validated. Existing Stage 0 workflow evidence predates this change.
+No distinct implementation is registered for parametric EQ, multiband compression, transient shaping, tape emulation, ping-pong/multi-tap delay, convolution reverb, granular processing, spectral freeze, frequency shifting, ring modulation, waveshaping, noise generation, filter bank or modulation matrix.
+
+## Verification
+
+The repository includes a queue test source and CTest target. Build/test execution has not been performed for the queue change; no effects are claimed newly tested or validated.

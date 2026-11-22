@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.22)
 project(NebulaMultiFX VERSION 0.1.0 LANGUAGES C CXX)
 
+include(CTest)
+
 add_subdirectory(JUCE)
 
 juce_add_plugin(NebulaMultiFX
@@ -20,8 +22,6 @@ juce_add_plugin(NebulaMultiFX
 target_sources(NebulaMultiFX PRIVATE
     PluginProcessor.cpp
     PluginProcessor.h
-    PluginEditor.cpp
-    PluginEditor.h
     Effects.cpp
     Effects.h
     Rack.cpp
@@ -30,12 +30,15 @@ target_sources(NebulaMultiFX PRIVATE
     PresetManager.h
     PresetBar.cpp
     PresetBar.h
+    PluginEditor.cpp
+    PluginEditor.h
     NebulaLookAndFeel.cpp
     NebulaLookAndFeel.h
     ReelComponent.cpp
     ReelComponent.h
     SpectrumDisplay.cpp
     SpectrumDisplay.h
+    SpectrumFrameQueue.h
 )
 
 target_compile_features(NebulaMultiFX PRIVATE cxx_std_17)
@@ -50,3 +53,12 @@ target_link_libraries(NebulaMultiFX
         juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags
 )
+
+if (BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(SpectrumFrameQueueTests tests/SpectrumFrameQueueTests.cpp)
+    target_include_directories(SpectrumFrameQueueTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_features(SpectrumFrameQueueTests PRIVATE cxx_std_17)
+    target_link_libraries(SpectrumFrameQueueTests PRIVATE Threads::Threads)
+    add_test(NAME SpectrumFrameQueueTests COMMAND SpectrumFrameQueueTests)
+endif()
