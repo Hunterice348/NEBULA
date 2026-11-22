@@ -8,10 +8,24 @@ NebulaAudioProcessor::NebulaAudioProcessor()
       apvts(*this, nullptr, "Parameters", createParameterLayout()),
       presetManager(apvts, rack)
 {
-    rack.onChanged = [this]() { /* Можно уведомить редактор */ };
+    rack.onChanged = [this]() { /* Уведомление редактора при необходимости */ };
 }
 
 NebulaAudioProcessor::~NebulaAudioProcessor() {}
+
+bool NebulaAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
+{
+    // FL Studio требует четкой валидации входов/выходов
+    if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::mono()
+     && layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
+        return false;
+
+    // Вход должен совпадать с выходом для эффекта
+    if (layouts.getMainOutputChannelSet() != layouts.getMainInputChannelSet())
+        return false;
+
+    return true;
+}
 
 juce::AudioProcessorValueTreeState::ParameterLayout
 NebulaAudioProcessor::createParameterLayout()
@@ -39,6 +53,12 @@ void NebulaAudioProcessor::releaseResources() {}
 void NebulaAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
     juce::ScopedNoDenormals noDenormals;
+    auto totalNumInputChannels  = getTotalNumInputChannels();
+    auto totalNumOutputChannels = getTotalNumOutputChannels();
+
+    for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
+        buffer.clear(i, 0, buffer.getNumSamples());
+
     dryBuffer.makeCopyOf(buffer, true);
 
     // 1. FFT для спектра
@@ -56,10 +76,14 @@ void NebulaAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
         spectrumReady.store(true);
     }
 
-    // 2. Чтение параметров
-    float inGain  = juce::Decibels::decibelsToGain(*apvts.getRawParameterValue("INPUT"));
-    float outGain = juce::Decibels::decibelsToGain(*apvts.getRawParameterValue("OUTPUT"));
-    float mix     = *apvts.getRawParameterValue("MIX") / 100.0f;
+    // 2. Чтение параметров без копирования std::atomic
+    auto* inParam  = apvts.getRawParameterValue("INPUT");
+    auto* outParam = apvts.getRawParameterValue("OUTPUT");
+    auto* mixParam = apvts.getRawParameterValue("MIX");
+
+    float inGain  = juce::Decibels::decibelsToGain(inParam  ? inParam->load()  : 0.0f);
+    float outGain = juce::Decibels::decibelsToGain(outParam ? outParam->load() : 0.0f);
+    float mix     = (mixParam ? mixParam->load() : 100.0f) / 100.0f;
 
     inputGainSmoothed.setTargetValue(inGain);
     outputGainSmoothed.setTargetValue(outGain);
@@ -68,12 +92,12 @@ void NebulaAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
     // 3. Входной гейн
     buffer.applyGain(inputGainSmoothed.getNextValue());
 
-    // 4. Rack (все эффекты с их внутренними bypass/mix)
+    // 4. Rack
     rack.process(buffer);
 
     // 5. Выходной микс и гейн
     float currentOutGain = outputGainSmoothed.getNextValue();
-    float currentMix = mixSmoothed.getNextValue();
+    float currentMix     = mixSmoothed.getNextValue();
     for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
     {
         auto* dry = dryBuffer.getReadPointer(ch);
