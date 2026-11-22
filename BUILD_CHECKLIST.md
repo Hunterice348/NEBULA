@@ -1,18 +1,15 @@
 # Build verification checklist
 
-This checklist covers the current NEBULA JUCE plugin targets and records the verified Stage 0 CI baseline. It does not imply that planned V2 features exist.
+This checklist covers the current NEBULA JUCE plugin targets and Stage 0 evidence. It does not imply planned V2 features exist.
 
-## Current build configuration
+## Prerequisites
 
-- CMake 3.22 or newer; C++17.
-- JUCE 8.0.6 source tree expected at `JUCE/` (the current GitHub Actions workflow clones this version).
-- Windows: Visual Studio 2022 with the C++ workload, x64.
-- macOS: Xcode/command-line tools; current workflow requests arm64 and x86_64 with a 10.15 deployment target.
-- Root CMake defines VST3 and Standalone formats. The workflow's artifact upload currently uploads VST3 bundles only.
+- C++17 compiler and CMake 3.22+.
+- JUCE 8.0.6 source tree at `JUCE/`.
+- Windows: Visual Studio 2022 C++ workload, x64.
+- macOS: Xcode/command-line tools.
 
-## Windows (Visual Studio 2022, x64)
-
-From the repository root in PowerShell, clone JUCE if `JUCE/` is not present, then configure and build:
+## Windows
 
 ```powershell
 git clone --depth 1 --branch 8.0.6 https://github.com/juce-framework/JUCE.git JUCE
@@ -20,16 +17,14 @@ cmake -B build -A x64
 cmake --build build --config Release
 ```
 
-Verify both targets were produced under `build` (paths can vary by generator):
+Expected artifact locations:
 
-- VST3: typically `build/NebulaMultiFX_artefacts/Release/VST3/NEBULA.vst3`
-- Standalone: typically `build/NebulaMultiFX_artefacts/Release/Standalone/NEBULA.exe`
+- VST3: `build/NebulaMultiFX_artefacts/Release/VST3/NEBULA.vst3`
+- Standalone: `build/NebulaMultiFX_artefacts/Release/Standalone/NEBULA.exe`
 
-A successful build command alone is not sufficient if either target was expected. Search the build tree and record the actual paths. The current Actions artifact upload is VST3-only; Standalone build output is not uploaded by that workflow.
+Search `build` and record the actual paths; generator layouts may vary.
 
-## macOS (Xcode)
-
-From the repository root, clone JUCE if `JUCE/` is not present, then configure and build both plugin formats:
+## macOS
 
 ```sh
 git clone --depth 1 --branch 8.0.6 https://github.com/juce-framework/JUCE.git JUCE
@@ -37,26 +32,36 @@ cmake -B build -G Xcode -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCMAKE_OSX_DEP
 cmake --build build --config Release
 ```
 
-Verify the VST3 bundle and Standalone application exist under `build` (search for `*.vst3` and `NEBULA.app`). Record the actual paths and architectures. The current Actions artifact upload is VST3-only; Standalone is not uploaded.
+Expected artifact locations:
 
-## GitHub Actions (verified baseline)
+- VST3: `*.vst3` under `build`
+- Standalone: `NEBULA.app` under `build`
 
-- Latest successful Stage 0 run: [Build VST3 run 45029388928](https://github.com/Hunterice348/NEBULA/actions/runs/45029388928).
-- Run metadata reports conclusion `success`, branch `feature/nebula-stage-0-build-fix`, commit `77c53a9d43e0c703842aede8258e33fe936908b0` (the base of `feature/nebula-v2` at Stage V2.0 start), and workflow `Build VST3`.
-- The workflow matrix is Windows and macOS, with a VST3 artifact upload step on each runner. This verifies the CI build workflow reported success, not local build commands, artifact download/inspection, Standalone artifact upload/launch, host validation, DSP tests or this documentation commit.
-- Earlier `main` runs failed at link time because the look-and-feel, reel and spectrum implementation files were not registered in CMake. The Stage 0 branch added those source registrations; the successful run is the evidence for that baseline fix.
-- The current workflow push trigger lists `main` and `master`, not `feature/nebula-v2`. A push to this development branch alone is not expected to trigger CI. Dispatch/build this branch explicitly or update workflow scope in a separately reviewed change; Stage V2.0 does not change CI configuration.
+## Stage 0 CI evidence
 
-## Stage V2.0 verification record
+Latest successful baseline run:
 
-- [x] Repository tree, root CMake configuration and C++ source layout inspected.
-- [x] Existing `BUILD_CHECKLIST.md` reviewed and useful configure/build instructions retained.
-- [x] Stage 0 successful run metadata verified; see link above.
-- [x] Documentation changes reviewed for explicit separation of current behavior from plans.
-- [ ] Native configure/build executed in a local environment: not available through the repository tools used for this task.
-- [ ] New CI run for the documentation commit: not executed; the current branch is outside the workflow's push trigger, and no workflow-dispatch capability is available in this task.
-- [ ] Download/verify Windows and macOS artifacts and Standalone outputs: not performed.
+- [Build VST3 run 45029388928](https://github.com/Hunterice348/NEBULA/actions/runs/45029388928)
+- Reported conclusion: success
+- Reported branch: `feature/nebula-stage-0-build-fix`
+- Reported commit: `77c53a9d43e0c703842aede8258e33fe936908b0`
 
-## Follow-up verification for future code stages
+The workflow builds Windows and macOS and uploads VST3 artifacts only. It does not verify Standalone downloads/launch, plugin-host behavior, or DSP tests.
 
-For each code change, record branch/SHA, Actions run and job links, compiler/test results, artifact names/paths and platform coverage. Before release, build VST3 and Standalone on Windows and macOS, verify artifact contents, run automated DSP/state/graph tests, and perform plugin-host validation where available. Do not report a check as passed based only on a configured workflow or a past baseline run.
+Earlier `main` runs failed because UI implementation source files were missing from CMake. Stage 0 registered those sources and produced the successful baseline run.
+
+The workflow is currently triggered by `main`/`master` pushes and manual dispatch, not development branch pushes. It must be triggered or its branch scope improved before branch CI verification.
+
+## Stage V2.0 verification
+
+- Repository tree, CMake and source layout reviewed.
+- Existing checklist instructions preserved.
+- Successful Stage 0 run metadata reviewed.
+- Documentation-only changes prepared; no DSP or UI source modified.
+- Native build not run through repository tools in this session.
+- Standalone artifact download and host validation not run.
+- CI run for this documentation commit not available until branch workflow triggering is configured or the branch is dispatched externally.
+
+## Future code-stage gate
+
+Record branch/SHA, Actions run/job links, build platform, test output, and actual artifact paths for every code stage. Before release, verify Windows/macOS VST3 and Standalone artifacts, state restoration, DSP tests and supported plugin-host behavior.
