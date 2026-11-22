@@ -1,11 +1,13 @@
+ 
 #pragma once
+
 #include <JuceHeader.h>
 #include <array>
 #include <atomic>
 #include <vector>
+#include <cmath>
+#include <algorithm>
 
-// Common effect contract. Preparation owns all buffer allocation; process() only
-// uses the prepared storage and safely bypasses oversized/unprepared blocks.
 class EffectBase
 {
 public:
@@ -16,30 +18,40 @@ public:
 
     void process(juce::AudioBuffer<float>& buffer)
     {
-        const int ns = buffer.getNumSamples();
-        const int nc = buffer.getNumChannels();
-        if (!enabled.load(std::memory_order_relaxed) || mixAmount.load(std::memory_order_relaxed) < 0.001f)
+        const int numSamples = buffer.getNumSamples();
+        const int numChannels = buffer.getNumChannels();
+
+        if (!enabled.load(std::memory_order_relaxed)
+            || mixAmount.load(std::memory_order_relaxed) < 0.001f)
             return;
 
-        // Never grow storage on the audio thread. Oversized blocks pass through
-        // this effect until the host re-prepares it with a suitable capacity.
-        if (ns > dryBuffer.getNumSamples() || nc > dryBuffer.getNumChannels())
+        if (numSamples > dryBuffer.getNumSamples()
+            || numChannels > dryBuffer.getNumChannels())
             return;
 
-        for (int ch = 0; ch < nc; ++ch)
-            dryBuffer.copyFrom(ch, 0, buffer, ch, 0, ns);
+        for (int ch = 0; ch < numChannels; ++ch)
+            dryBuffer.copyFrom(ch, 0, buffer, ch, 0, numSamples);
 
         processWet(buffer);
-        const float wetAmount = juce::jlimit(0.0f, 1.0f, mixAmount.load(std::memory_order_relaxed));
-        for (int ch = 0; ch < nc; ++ch)
+
+        const float wetAmount = juce::jlimit(
+            0.0f, 1.0f,
+            mixAmount.load(std::memory_order_relaxed));
+
+        for (int ch = 0; ch < numChannels; ++ch)
         {
             auto* wet = buffer.getWritePointer(ch);
             const auto* dry = dryBuffer.getReadPointer(ch);
-            for (int i = 0; i < ns; ++i)
+
+            for (int i = 0; i < numSamples; ++i)
             {
                 float sample = std::isfinite(wet[i]) ? wet[i] : 0.0f;
-                if (std::abs(sample) < 1.0e-30f) sample = 0.0f;
-                wet[i] = dry[i] * (1.0f - wetAmount) + sample * wetAmount;
+
+                if (std::abs(sample) < 1.0e-30f)
+                    sample = 0.0f;
+
+                wet[i] = dry[i] * (1.0f - wetAmount)
+                       + sample * wetAmount;
             }
         }
     }
@@ -47,188 +59,558 @@ public:
     virtual juce::String getTypeID() const = 0;
     virtual juce::String getDisplayName() const = 0;
     virtual int getNumParams() const = 0;
-    virtual juce::String getParamName(int i) const = 0;
-    virtual float getParam(int i) const = 0;
-    virtual void setParam(int i, float v) = 0;
+    virtual juce::String getParamName(int index) const = 0;
+    virtual float getParam(int index) const = 0;
+    virtual void setParam(int index, float value) = 0;
 
-    bool isEnabled() const { return enabled.load(std::memory_order_relaxed); }
-    void setEnabled(bool e) { enabled.store(e, std::memory_order_relaxed); }
-    float getMix() const { return mixAmount.load(std::memory_order_relaxed); }
-    void setMix(float m) { mixAmount.store(juce::jlimit(0.0f, 1.0f, std::isfinite(m) ? m : 1.0f), std::memory_order_relaxed); }
+    bool isEnabled() const
+    {
+        return enabled.load(std::memory_order_relaxed);
+    }
+
+    void setEnabled(bool value)
+    {
+        enabled.store(value, std::memory_order_relaxed);
+    }
+
+    float getMix() const
+    {
+        return mixAmount.load(std::memory_order_relaxed);
+    }
+
+    void setMix(float value)
+    {
+        if (!std::isfinite(value))
+            value = 1.0f;
+
+        mixAmount.store(
+            juce::jlimit(0.0f, 1.0f, value),
+            std::memory_order_relaxed);
+    }
 
     virtual juce::ValueTree saveState() const
     {
-        juce::ValueTree t(getTypeID());
-        t.setProperty("on", isEnabled(), nullptr);
-        t.setProperty("mix", getMix(), nullptr);
+        juce::ValueTree tree(getTypeID());
+
+        tree.setProperty("on", isEnabled(), nullptr);
+        tree.setProperty("mix", getMix(), nullptr);
+
         for (int i = 0; i < getNumParams(); ++i)
-            t.setProperty("p" + juce::String(i), getParam(i), nullptr);
-        return t;
+            tree.setProperty("p" + juce::String(i), getParam(i), nullptr);
+
+        return tree;
     }
-    virtual void loadState(const juce::ValueTree& t)
+
+    virtual void loadState(const juce::ValueTree& tree)
     {
-        if (!t.hasType(getTypeID())) return;
-        setEnabled((bool)t.getProperty("on", true));
-        setMix((float)t.getProperty("mix", 1.0f));
+        if (!tree.hasType(getTypeID()))
+            return;
+
+        setEnabled((bool)tree.getProperty("on", true));
+        setMix((float)tree.getProperty("mix", 1.0f));
+
         for (int i = 0; i < getNumParams(); ++i)
-            if (t.hasProperty("p" + juce::String(i)))
-                setParam(i, (float)t.getProperty("p" + juce::String(i)));
+        {
+            const juce::Identifier property("p" + juce::String(i));
+
+            if (tree.hasProperty(property))
+                setParam(i, (float)tree.getProperty(property));
+        }
     }
 
 protected:
-    virtual void processWet(juce::AudioBuffer<float>&) = 0;
+    virtual void processWet(juce::AudioBuffer<float>& buffer) = 0;
+
     void prepareBase(double sampleRate, int maxBlockSize, int maxChannels = 2)
     {
         sr = sampleRate;
         bs = juce::jmax(1, maxBlockSize);
-        dryBuffer.setSize(juce::jmax(1, maxChannels), bs, false, true, true);
+
+        dryBuffer.setSize(
+            juce::jmax(1, maxChannels),
+            bs,
+            false,
+            true,
+            true);
     }
 
     std::atomic<bool> enabled { true };
     std::atomic<float> mixAmount { 1.0f };
+
     double sr = 44100.0;
     int bs = 512;
+
     juce::AudioBuffer<float> dryBuffer;
 };
+
+// ============================================================
+// REVERB
+// ============================================================
 
 class ReverbEffect : public EffectBase
 {
 public:
-    void prepare(double s, int b) override;
+    void prepare(double sampleRate, int blockSize) override;
     void reset() override;
     void processWet(juce::AudioBuffer<float>& buffer) override;
+
     juce::String getTypeID() const override { return "reverb"; }
     juce::String getDisplayName() const override { return "Reverb"; }
+
     int getNumParams() const override { return 3; }
-    juce::String getParamName(int i) const override { switch (i) { case 0: return "Size"; case 1: return "Decay"; default: return "Damp"; } }
-    float getParam(int i) const override { switch (i) { case 0: return size; case 1: return decay; default: return damp; } }
-    void setParam(int i, float v) override;
+
+    juce::String getParamName(int i) const override
+    {
+        switch (i)
+        {
+            case 0: return "Size";
+            case 1: return "Decay";
+            case 2: return "Damp";
+            default: return {};
+        }
+    }
+
+    float getParam(int i) const override
+    {
+        switch (i)
+        {
+            case 0: return size.load(std::memory_order_relaxed);
+            case 1: return decay.load(std::memory_order_relaxed);
+            case 2: return damp.load(std::memory_order_relaxed);
+            default: return 0.0f;
+        }
+    }
+
+    void setParam(int i, float value) override;
+
 private:
     juce::dsp::Reverb reverb;
-    float size = 0.5f, decay = 0.5f, damp = 0.5f;
+
+    std::atomic<float> size { 0.5f };
+    std::atomic<float> decay { 0.5f };
+    std::atomic<float> damp { 0.5f };
+
     void updateParams();
 };
+
+// ============================================================
+// DELAY
+// ============================================================
 
 class DelayEffect : public EffectBase
 {
 public:
-    void prepare(double s, int b) override;
+    void prepare(double sampleRate, int blockSize) override;
     void reset() override;
     void processWet(juce::AudioBuffer<float>& buffer) override;
+
     juce::String getTypeID() const override { return "delay"; }
     juce::String getDisplayName() const override { return "Delay"; }
+
     int getNumParams() const override { return 2; }
-    juce::String getParamName(int i) const override { return i == 0 ? "Time" : "Fdbk"; }
-    float getParam(int i) const override { return i == 0 ? time : feedback; }
-    void setParam(int i, float v) override { v = juce::jlimit(0.0f, 1.0f, std::isfinite(v) ? v : 0.0f); if (i == 0) time = v; else feedback = v; }
+
+    juce::String getParamName(int i) const override
+    {
+        switch (i)
+        {
+            case 0: return "Time";
+            case 1: return "Fdbk";
+            default: return {};
+        }
+    }
+
+    float getParam(int i) const override
+    {
+        switch (i)
+        {
+            case 0: return time.load(std::memory_order_relaxed);
+            case 1: return feedback.load(std::memory_order_relaxed);
+            default: return 0.0f;
+        }
+    }
+
+    void setParam(int i, float value) override
+    {
+        if (!std::isfinite(value))
+            return;
+
+        value = juce::jlimit(0.0f, 1.0f, value);
+
+        if (i == 0)
+            time.store(value, std::memory_order_relaxed);
+        else if (i == 1)
+            feedback.store(value, std::memory_order_relaxed);
+    }
+
 private:
     std::vector<float> bufL, bufR;
-    int writePos = 0, maxSamples = 0;
-    float time = 0.3f, feedback = 0.4f;
+
+    int writePos = 0;
+    int maxSamples = 0;
+
+    std::atomic<float> time { 0.3f };
+    std::atomic<float> feedback { 0.4f };
 };
+
+// ============================================================
+// DISTORTION
+// ============================================================
 
 class DistortionEffect : public EffectBase
 {
 public:
-    void prepare(double s, int b) override;
+    void prepare(double sampleRate, int blockSize) override;
     void reset() override;
     void processWet(juce::AudioBuffer<float>& buffer) override;
+
     juce::String getTypeID() const override { return "distortion"; }
     juce::String getDisplayName() const override { return "Distortion"; }
+
     int getNumParams() const override { return 2; }
-    juce::String getParamName(int i) const override { return i == 0 ? "Drive" : "Tone"; }
-    float getParam(int i) const override { return i == 0 ? drive : tone; }
-    void setParam(int i, float v) override;
+
+    juce::String getParamName(int i) const override
+    {
+        switch (i)
+        {
+            case 0: return "Drive";
+            case 1: return "Tone";
+            default: return {};
+        }
+    }
+
+    float getParam(int i) const override
+    {
+        if (i == 0)
+            return drive.load(std::memory_order_relaxed);
+
+        if (i == 1)
+            return tone.load(std::memory_order_relaxed);
+
+        return 0.0f;
+    }
+
+    void setParam(int i, float value) override
+    {
+        if (!std::isfinite(value))
+            return;
+
+        value = juce::jlimit(0.0f, 1.0f, value);
+
+        if (i == 0)
+            drive.store(value, std::memory_order_relaxed);
+        else if (i == 1)
+            tone.store(value, std::memory_order_relaxed);
+    }
+
 private:
-    juce::dsp::IIR::Filter<float> toneL, toneR;
-    float drive = 0.5f, tone = 0.7f;
-    void updateTone();
+    std::atomic<float> drive { 0.5f };
+    std::atomic<float> tone { 0.7f };
+
+    std::array<float, 2> toneState {};
 };
+
+// ============================================================
+// CHORUS
+// ============================================================
 
 class ChorusEffect : public EffectBase
 {
 public:
-    void prepare(double s, int b) override;
+    void prepare(double sampleRate, int blockSize) override;
     void reset() override;
     void processWet(juce::AudioBuffer<float>& buffer) override;
+
     juce::String getTypeID() const override { return "chorus"; }
     juce::String getDisplayName() const override { return "Chorus"; }
+
     int getNumParams() const override { return 2; }
-    juce::String getParamName(int i) const override { return i == 0 ? "Rate" : "Depth"; }
-    float getParam(int i) const override { return i == 0 ? rate : depth; }
-    void setParam(int i, float v) override { v = juce::jlimit(0.0f, 1.0f, std::isfinite(v) ? v : 0.0f); if (i == 0) rate = v; else depth = v; }
+
+    juce::String getParamName(int i) const override
+    {
+        switch (i)
+        {
+            case 0: return "Rate";
+            case 1: return "Depth";
+            default: return {};
+        }
+    }
+
+    float getParam(int i) const override
+    {
+        if (i == 0)
+            return rate.load(std::memory_order_relaxed);
+
+        if (i == 1)
+            return depth.load(std::memory_order_relaxed);
+
+        return 0.0f;
+    }
+
+    void setParam(int i, float value) override
+    {
+        if (!std::isfinite(value))
+            return;
+
+        value = juce::jlimit(0.0f, 1.0f, value);
+
+        if (i == 0)
+            rate.store(value, std::memory_order_relaxed);
+        else if (i == 1)
+            depth.store(value, std::memory_order_relaxed);
+    }
+
 private:
     juce::dsp::Chorus<float> chorus;
-    float rate = 0.3f, depth = 0.5f;
+
+    std::atomic<float> rate { 0.3f };
+    std::atomic<float> depth { 0.5f };
 };
+
+// ============================================================
+// PHASER
+// ============================================================
 
 class PhaserEffect : public EffectBase
 {
 public:
-    void prepare(double s, int b) override;
+    void prepare(double sampleRate, int blockSize) override;
     void reset() override;
     void processWet(juce::AudioBuffer<float>& buffer) override;
+
     juce::String getTypeID() const override { return "phaser"; }
     juce::String getDisplayName() const override { return "Phaser"; }
+
     int getNumParams() const override { return 3; }
-    juce::String getParamName(int i) const override { switch (i) { case 0: return "Rate"; case 1: return "Depth"; default: return "Fdbk"; } }
-    float getParam(int i) const override { switch (i) { case 0: return rate; case 1: return depth; default: return feedback; } }
-    void setParam(int i, float v) override { v = juce::jlimit(0.0f, 1.0f, std::isfinite(v) ? v : 0.0f); switch (i) { case 0: rate = v; break; case 1: depth = v; break; default: feedback = v; } }
+
+    juce::String getParamName(int i) const override
+    {
+        switch (i)
+        {
+            case 0: return "Rate";
+            case 1: return "Depth";
+            case 2: return "Fdbk";
+            default: return {};
+        }
+    }
+
+    float getParam(int i) const override
+    {
+        switch (i)
+        {
+            case 0: return rate.load(std::memory_order_relaxed);
+            case 1: return depth.load(std::memory_order_relaxed);
+            case 2: return feedback.load(std::memory_order_relaxed);
+            default: return 0.0f;
+        }
+    }
+
+    void setParam(int i, float value) override
+    {
+        if (!std::isfinite(value))
+            return;
+
+        value = juce::jlimit(0.0f, 1.0f, value);
+
+        switch (i)
+        {
+            case 0: rate.store(value, std::memory_order_relaxed); break;
+            case 1: depth.store(value, std::memory_order_relaxed); break;
+            case 2: feedback.store(value, std::memory_order_relaxed); break;
+            default: break;
+        }
+    }
+
 private:
     juce::dsp::Phaser<float> phaser;
-    float rate = 0.3f, depth = 0.5f, feedback = 0.4f;
+
+    std::atomic<float> rate { 0.3f };
+    std::atomic<float> depth { 0.5f };
+    std::atomic<float> feedback { 0.4f };
 };
+
+// ============================================================
+// COMPRESSOR
+// ============================================================
 
 class CompressorEffect : public EffectBase
 {
 public:
-    void prepare(double s, int b) override;
+    void prepare(double sampleRate, int blockSize) override;
     void reset() override;
     void processWet(juce::AudioBuffer<float>& buffer) override;
+
     juce::String getTypeID() const override { return "compressor"; }
     juce::String getDisplayName() const override { return "Compressor"; }
+
     int getNumParams() const override { return 3; }
-    juce::String getParamName(int i) const override { switch (i) { case 0: return "Thresh"; case 1: return "Ratio"; default: return "Attack"; } }
-    float getParam(int i) const override { switch (i) { case 0: return threshold; case 1: return ratio; default: return attack; } }
-    void setParam(int i, float v) override;
+
+    juce::String getParamName(int i) const override
+    {
+        switch (i)
+        {
+            case 0: return "Thresh";
+            case 1: return "Ratio";
+            case 2: return "Attack";
+            default: return {};
+        }
+    }
+
+    float getParam(int i) const override
+    {
+        switch (i)
+        {
+            case 0: return threshold.load(std::memory_order_relaxed);
+            case 1: return ratio.load(std::memory_order_relaxed);
+            case 2: return attack.load(std::memory_order_relaxed);
+            default: return 0.0f;
+        }
+    }
+
+    void setParam(int i, float value) override
+    {
+        if (!std::isfinite(value))
+            return;
+
+        value = juce::jlimit(0.0f, 1.0f, value);
+
+        switch (i)
+        {
+            case 0: threshold.store(value, std::memory_order_relaxed); break;
+            case 1: ratio.store(value, std::memory_order_relaxed); break;
+            case 2: attack.store(value, std::memory_order_relaxed); break;
+            default: break;
+        }
+    }
+
 private:
     juce::dsp::Compressor<float> comp;
-    float threshold = 0.5f, ratio = 0.5f, attack = 0.5f;
-    void updateParams();
+
+    std::atomic<float> threshold { 0.5f };
+    std::atomic<float> ratio { 0.5f };
+    std::atomic<float> attack { 0.5f };
 };
+
+// ============================================================
+// BITCRUSHER
+// ============================================================
 
 class BitcrusherEffect : public EffectBase
 {
 public:
-    void prepare(double s, int b) override { prepareBase(s, b, 2); reset(); }
-    void reset() override { held = {}; phase = {}; }
+    void prepare(double sampleRate, int blockSize) override
+    {
+        prepareBase(sampleRate, blockSize, 2);
+        reset();
+    }
+
+    void reset() override
+    {
+        held = {};
+        phase = {};
+    }
+
     void processWet(juce::AudioBuffer<float>& buffer) override;
+
     juce::String getTypeID() const override { return "bitcrusher"; }
     juce::String getDisplayName() const override { return "Bitcrusher"; }
+
     int getNumParams() const override { return 2; }
-    juce::String getParamName(int i) const override { return i == 0 ? "Bits" : "Rate"; }
-    float getParam(int i) const override { return i == 0 ? bitDepth : downsample; }
-    void setParam(int i, float v) override { v = juce::jlimit(0.0f, 1.0f, std::isfinite(v) ? v : 0.0f); if (i == 0) bitDepth = v; else downsample = v; }
+
+    juce::String getParamName(int i) const override
+    {
+        switch (i)
+        {
+            case 0: return "Bits";
+            case 1: return "Rate";
+            default: return {};
+        }
+    }
+
+    float getParam(int i) const override
+    {
+        if (i == 0)
+            return bitDepth.load(std::memory_order_relaxed);
+
+        if (i == 1)
+            return downsample.load(std::memory_order_relaxed);
+
+        return 0.0f;
+    }
+
+    void setParam(int i, float value) override
+    {
+        if (!std::isfinite(value))
+            return;
+
+        value = juce::jlimit(0.0f, 1.0f, value);
+
+        if (i == 0)
+            bitDepth.store(value, std::memory_order_relaxed);
+        else if (i == 1)
+            downsample.store(value, std::memory_order_relaxed);
+    }
+
 private:
-    float bitDepth = 0.5f, downsample = 0.5f;
+    std::atomic<float> bitDepth { 0.5f };
+    std::atomic<float> downsample { 0.5f };
+
     std::array<float, 2> held {};
     std::array<int, 2> phase {};
 };
 
+// ============================================================
+// FILTER
+// ============================================================
+
 class FilterEffect : public EffectBase
 {
 public:
-    void prepare(double s, int b) override;
+    void prepare(double sampleRate, int blockSize) override;
     void reset() override;
     void processWet(juce::AudioBuffer<float>& buffer) override;
+
     juce::String getTypeID() const override { return "filter"; }
     juce::String getDisplayName() const override { return "Filter"; }
+
     int getNumParams() const override { return 2; }
-    juce::String getParamName(int i) const override { return i == 0 ? "Cutoff" : "Reso"; }
-    float getParam(int i) const override { return i == 0 ? cutoff : resonance; }
-    void setParam(int i, float v) override;
+
+    juce::String getParamName(int i) const override
+    {
+        switch (i)
+        {
+            case 0: return "Cutoff";
+            case 1: return "Reso";
+            default: return {};
+        }
+    }
+
+    float getParam(int i) const override
+    {
+        if (i == 0)
+            return cutoff.load(std::memory_order_relaxed);
+
+        if (i == 1)
+            return resonance.load(std::memory_order_relaxed);
+
+        return 0.0f;
+    }
+
+    void setParam(int i, float value) override
+    {
+        if (!std::isfinite(value))
+            return;
+
+        value = juce::jlimit(0.0f, 1.0f, value);
+
+        if (i == 0)
+            cutoff.store(value, std::memory_order_relaxed);
+        else if (i == 1)
+            resonance.store(value, std::memory_order_relaxed);
+    }
+
 private:
     juce::dsp::StateVariableTPTFilter<float> filter;
-    float cutoff = 0.5f, resonance = 0.3f;
-    void updateParams();
+
+    std::atomic<float> cutoff { 0.5f };
+    std::atomic<float> resonance { 0.3f };
 };
