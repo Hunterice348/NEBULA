@@ -11,4 +11,6 @@ public:
     void timerCallback() override;
 private:
     NebulaAudioProcessor& proc;
+    nebula::SpectrumFrame localFrame {};
+    bool hasFrame = false; // message-thread-only
 };

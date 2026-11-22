@@ -2,6 +2,7 @@
 #include <JuceHeader.h>
 #include "Rack.h"
 #include "PresetManager.h"
+#include "SpectrumFrameQueue.h"
 
 class NebulaAudioProcessor : public juce::AudioProcessor
 {
@@ -36,15 +37,15 @@ public:
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
-    // Для визуализации
     static constexpr int FFT_SIZE = 1024;
-    std::array<float, FFT_SIZE / 2> spectrumData {};
-    std::atomic<bool> spectrumReady { false };
+    bool tryPopSpectrumFrame(nebula::SpectrumFrame& frame) noexcept { return spectrumFrames.tryPop(frame); }
 
 private:
     juce::dsp::FFT fft { 10 };
     juce::dsp::WindowingFunction<float> window { FFT_SIZE, juce::dsp::WindowingFunction<float>::hann };
     std::array<float, FFT_SIZE> fftBuffer {};
+    std::uint64_t spectrumSequence = 0; // audio-thread-only
+    nebula::SpectrumFrameQueue spectrumFrames;
 
     juce::AudioBuffer<float> dryBuffer;
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> inputGainSmoothed, outputGainSmoothed, mixSmoothed;
