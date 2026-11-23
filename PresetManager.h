@@ -2,7 +2,6 @@
 #pragma once
 
 #include <JuceHeader.h>
-
 #include <functional>
 #include <map>
 #include <vector>
@@ -17,12 +16,10 @@ public:
         juce::AudioProcessorValueTreeState& apvts,
         Rack& rack);
 
-    // Preset lists
     juce::StringArray getFactoryPresetNames() const;
     juce::StringArray getUserPresetNames() const;
     juce::StringArray getAllPresetNames() const;
 
-    // Preset operations
     bool loadPreset(const juce::String& name);
     bool loadPresetByIndex(int index);
 
@@ -32,35 +29,36 @@ public:
     bool loadNextPreset();
     bool loadPreviousPreset();
 
-    // Current preset
-    juce::String getCurrentPresetName() const
-    {
-        return currentPresetName;
-    }
-
-    void setCurrentPresetName(const juce::String& name)
-    {
-        currentPresetName = name;
-    }
+    juce::String getCurrentPresetName() const;
+    void setCurrentPresetName(const juce::String& name);
 
     bool isFactoryPreset(const juce::String& name) const;
 
-    // Storage management
     juce::File getStorageRoot() const;
+    bool moveStorageTo(const juce::File& directory);
 
-    bool moveStorageTo(
-        const juce::File& directory);
-
-    // Callbacks
     std::function<void()> onPresetChanged;
     std::function<void()> onPresetListChanged;
 
 private:
+    struct FactoryEffect
+    {
+        juce::String typeID;
+        bool enabled = true;
+        float mix = 1.0f;
+    };
+
+    struct FactoryPreset
+    {
+        juce::String name;
+        std::map<juce::String, float> parameters;
+        std::vector<FactoryEffect> effects;
+    };
+
     juce::AudioProcessorValueTreeState& apvts;
     Rack& rack;
 
     StorageManager storageManager;
-
     juce::File presetDir;
 
     juce::StringArray factoryNames;
@@ -68,21 +66,19 @@ private:
 
     juce::String currentPresetName;
 
+    std::vector<FactoryPreset> factoryPresets;
+
+    void buildFactoryPresets();
     void scanUserPresets();
 
     juce::File presetFile(
         const juce::String& name) const;
 
-    void buildFactoryPresets();
+    bool loadFactoryPreset(
+        const FactoryPreset& preset);
 
-    struct FactoryPreset
-    {
-        juce::String name;
+    static bool isValidPresetName(
+        const juce::String& name);
 
-        std::map<juce::String, float> params;
-
-        std::vector<juce::String> chain;
-    };
-
-    std::vector<FactoryPreset> factoryPresets;
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PresetManager)
 };
