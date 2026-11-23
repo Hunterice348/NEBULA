@@ -1,7 +1,7 @@
 
 cmake_minimum_required(VERSION 3.22)
 
-project(NEBULA VERSION 0.2.0 LANGUAGES C CXX)
+project(NEBULA VERSION 0.3.0 LANGUAGES C CXX)
 
 include(CTest)
 
@@ -24,25 +24,38 @@ juce_add_plugin(NebulaMultiFX
 target_sources(NebulaMultiFX PRIVATE
     PluginProcessor.cpp
     PluginProcessor.h
+
     Effects.cpp
     Effects.h
+
     Rack.cpp
     Rack.h
+
     PresetManager.cpp
     PresetManager.h
+
     PresetBar.cpp
     PresetBar.h
+
     StorageManager.cpp
     StorageManager.h
+
     PluginEditor.cpp
     PluginEditor.h
+
     NebulaLookAndFeel.cpp
     NebulaLookAndFeel.h
+
     ReelComponent.cpp
     ReelComponent.h
+
     SpectrumDisplay.cpp
     SpectrumDisplay.h
+
     SpectrumFrameQueue.h
+
+    GenerationEngine.cpp
+    GenerationEngine.h
 )
 
 target_compile_features(NebulaMultiFX PRIVATE cxx_std_17)
