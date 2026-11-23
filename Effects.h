@@ -1,5 +1,14 @@
 
+
+#pragma once
+
+#include <JuceHeader.h>
 #include "DSP/DSPCore.h"
+
+#include <atomic>
+#include <cmath>
+#include <algorithm>
+
 
 class EffectBase
 {
