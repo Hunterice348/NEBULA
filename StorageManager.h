@@ -8,10 +8,8 @@ class StorageManager
 public:
     StorageManager();
 
-    // Main user data directory.
     juce::File getDataRoot() const;
 
-    // Data subdirectories.
     juce::File getPresetsDirectory() const;
     juce::File getSamplesDirectory() const;
     juce::File getDrumKitsDirectory() const;
@@ -19,13 +17,10 @@ public:
     juce::File getBanksDirectory() const;
     juce::File getSettingsDirectory() const;
 
-    // Select an existing data directory.
-    // This does not move or delete any files.
     bool setDataRoot(const juce::File& directory);
 
-    // Copy the complete NEBULA data library
-    // to a new, empty destination directory.
-    // The original library is preserved.
+    // Copies the complete data library to a new directory.
+    // The source directory is preserved.
     bool moveDataTo(const juce::File& directory);
 
 private:
