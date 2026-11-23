@@ -1,186 +1,537 @@
+
 #include "PluginEditor.h"
 
-// ===== EffectCard =====
-EffectCard::EffectCard(EffectBase& fx, NebulaAudioProcessor& /*proc*/) : effect(fx)
+// ============================================================
+// EFFECT CARD
+// ============================================================
+
+EffectCard::EffectCard(
+    Rack& rackRef,
+    int effectIndex,
+    const Rack::EffectInfo& info)
+    : rack(rackRef),
+      index(effectIndex)
 {
-    nameLabel.setText(effect.getDisplayName(), juce::dontSendNotification);
-    nameLabel.setFont(juce::Font(juce::FontOptions(14.0f, juce::Font::bold)));
-    nameLabel.setColour(juce::Label::textColourId, juce::Colour(0xFFE0E0E0));
+    nameLabel.setText(
+        info.displayName,
+        juce::dontSendNotification);
+
+    nameLabel.setFont(
+        juce::Font(juce::FontOptions(14.0f, juce::Font::bold)));
+
+    nameLabel.setColour(
+        juce::Label::textColourId,
+        juce::Colour(0xFFE0E0E0));
+
     addAndMakeVisible(nameLabel);
 
-    onButton.setButtonText("ON");
-    onButton.setToggleState(effect.isEnabled(), juce::dontSendNotification);
-    onButton.onClick = [this]() { effect.setEnabled(onButton.getToggleState()); };
+    onButton.setToggleState(
+        info.enabled,
+        juce::dontSendNotification);
+
+    onButton.onClick = [this]()
+    {
+        rack.setEffectEnabled(
+            index,
+            onButton.getToggleState());
+    };
+
     addAndMakeVisible(onButton);
 
-    mixKnob.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
-    mixKnob.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 50, 14);
-    mixKnob.setValue(effect.getMix(), juce::dontSendNotification);
-    mixKnob.onValueChange = [this]() { effect.setMix((float)mixKnob.getValue()); };
+    mixKnob.setSliderStyle(
+        juce::Slider::RotaryHorizontalVerticalDrag);
+
+    mixKnob.setTextBoxStyle(
+        juce::Slider::TextBoxBelow,
+        false,
+        48,
+        14);
+
+    mixKnob.setRange(0.0, 1.0, 0.001);
+    mixKnob.setValue(info.mix, juce::dontSendNotification);
+    mixKnob.setTooltip("Effect wet/dry mix");
+
+    mixKnob.onValueChange = [this]()
+    {
+        rack.setEffectMix(
+            index,
+            static_cast<float>(mixKnob.getValue()));
+    };
+
     addAndMakeVisible(mixKnob);
 
-    for (int i = 0; i < effect.getNumParams(); ++i) {
-        auto knob = std::make_unique<juce::Slider>(juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::TextBoxBelow);
-        knob->setValue(effect.getParam(i), juce::dontSendNotification);
-        knob->onValueChange = [this, i, raw = knob.get()]() { effect.setParam(i, (float)raw->getValue()); };
+    const int parameterCount =
+        static_cast<int>(info.parameterNames.size());
+
+    paramKnobs.reserve(static_cast<size_t>(parameterCount));
+    paramLabels.reserve(static_cast<size_t>(parameterCount));
+
+    for (int i = 0; i < parameterCount; ++i)
+    {
+        auto knob = std::make_unique<juce::Slider>();
+
+        knob->setSliderStyle(
+            juce::Slider::RotaryHorizontalVerticalDrag);
+
+        knob->setTextBoxStyle(
+            juce::Slider::TextBoxBelow,
+            false,
+            48,
+            14);
+
+        knob->setRange(0.0, 1.0, 0.001);
+
+        const float value =
+            i < static_cast<int>(info.parameterValues.size())
+                ? info.parameterValues[static_cast<size_t>(i)]
+                : 0.5f;
+
+        knob->setValue(
+            value,
+            juce::dontSendNotification);
+
+        knob->setTooltip(info.parameterNames[static_cast<size_t>(i)]);
+
+        knob->onValueChange = [this, i, raw = knob.get()]()
+        {
+            rack.setEffectParameter(
+                index,
+                i,
+                static_cast<float>(raw->getValue()));
+        };
+
         addAndMakeVisible(*knob);
         paramKnobs.push_back(std::move(knob));
 
-        auto lbl = std::make_unique<juce::Label>("", effect.getParamName(i));
-        lbl->setJustificationType(juce::Justification::centred);
-        lbl->setColour(juce::Label::textColourId, juce::Colour(0xFFB0B0B0));
-        lbl->setFont(juce::Font(juce::FontOptions(10.0f)));
-        addAndMakeVisible(*lbl);
-        paramLabels.push_back(std::move(lbl));
+        auto label = std::make_unique<juce::Label>();
+
+        label->setText(
+            info.parameterNames[static_cast<size_t>(i)],
+            juce::dontSendNotification);
+
+        label->setJustificationType(
+            juce::Justification::centred);
+
+        label->setColour(
+            juce::Label::textColourId,
+            juce::Colour(0xFFB0B8C8));
+
+        label->setFont(
+            juce::Font(juce::FontOptions(10.0f)));
+
+        addAndMakeVisible(*label);
+        paramLabels.push_back(std::move(label));
     }
-    setSize(800, 55);
+
+    setSize(850, 66);
 }
 
 void EffectCard::paint(juce::Graphics& g)
 {
-    g.setColour(juce::Colour(0xFF161A26).withAlpha(0.9f));
-    g.fillRoundedRectangle(getLocalBounds().toFloat(), 5.0f);
-    g.setColour(juce::Colour(0xFF00E5FF).withAlpha(0.3f));
-    g.drawRoundedRectangle(getLocalBounds().toFloat(), 5.0f, 1.0f);
+    auto bounds = getLocalBounds().toFloat();
+
+    g.setColour(juce::Colour(0xFF161A26));
+    g.fillRoundedRectangle(bounds, 7.0f);
+
+    g.setColour(
+        NebulaLookAndFeel::getCyan().withAlpha(0.35f));
+
+    g.drawRoundedRectangle(bounds, 7.0f, 1.0f);
+
+    g.setColour(
+        NebulaLookAndFeel::getViolet().withAlpha(0.12f));
+
+    g.fillRoundedRectangle(
+        bounds.removeFromTop(2.0f),
+        2.0f);
 }
 
 void EffectCard::resized()
 {
-    auto b = getLocalBounds().reduced(6);
-    b.removeFromTop(4);
-    nameLabel.setBounds(b.removeFromLeft(100));
-    onButton.setBounds(b.removeFromRight(40).reduced(0, 10));
-    auto mixArea = b.removeFromRight(60);
-    mixKnob.setBounds(mixArea);
+    auto area = getLocalBounds().reduced(7);
 
-    int n = (int)paramKnobs.size();
-    if (n == 0) return;
-    int w = b.getWidth() / n;
-    for (int i = 0; i < n; ++i) {
-        auto cell = b.removeFromLeft(w);
-        paramLabels[i]->setBounds(cell.removeFromTop(12));
-        paramKnobs[i]->setBounds(cell);
+    nameLabel.setBounds(
+        area.removeFromLeft(105));
+
+    onButton.setBounds(
+        area.removeFromRight(42).reduced(0, 12));
+
+    mixKnob.setBounds(
+        area.removeFromRight(62));
+
+    const int count =
+        static_cast<int>(paramKnobs.size());
+
+    if (count <= 0)
+        return;
+
+    const int cellWidth =
+        juce::jmax(1, area.getWidth() / count);
+
+    for (int i = 0; i < count; ++i)
+    {
+        auto cell = area.removeFromLeft(cellWidth);
+
+        paramLabels[static_cast<size_t>(i)]->setBounds(
+            cell.removeFromTop(13));
+
+        paramKnobs[static_cast<size_t>(i)]->setBounds(cell);
     }
 }
 
-// ===== Editor =====
-NebulaAudioProcessorEditor::NebulaAudioProcessorEditor(NebulaAudioProcessor& p)
-    : AudioProcessorEditor(&p), proc(p),
-      presetBar(p.presetManager),
-      leftReel(p, true), rightReel(p, false),
-      spectrum(p)
+
+// ============================================================
+// EDITOR
+// ============================================================
+
+NebulaAudioProcessorEditor::NebulaAudioProcessorEditor(
+    NebulaAudioProcessor& processor)
+    : juce::AudioProcessorEditor(&processor),
+      proc(processor),
+      presetBar(processor.presetManager),
+      leftReel(processor, true),
+      rightReel(processor, false),
+      spectrum(processor)
 {
     setLookAndFeel(&lf);
+
     setSize(900, 640);
-    setResizable(false, false);
+    setResizable(true, true);
+    setResizeLimits(760, 560, 1600, 1100);
 
     addAndMakeVisible(presetBar);
     addAndMakeVisible(leftReel);
     addAndMakeVisible(rightReel);
     addAndMakeVisible(spectrum);
 
-    rackViewport.setViewedComponent(&rackContent, false);
+    rackViewport.setViewedComponent(
+        &rackContent,
+        false);
+
     rackViewport.setScrollBarsShown(true, false);
     addAndMakeVisible(rackViewport);
 
-    aiInput.setTextToShowWhenEmpty("Describe what you want... e.g. warm pad with space", juce::Colours::grey);
-    aiInput.setColour(juce::TextEditor::backgroundColourId, juce::Colour(0xFF0A0E1A));
-    aiInput.setColour(juce::TextEditor::textColourId, juce::Colour(0xFFE0E0E0));
-    aiInput.setColour(juce::TextEditor::outlineColourId, juce::Colour(0xFF00E5FF).withAlpha(0.5f));
+    // --------------------------------------------------------
+    // AI / QUICK EFFECT GENERATOR
+    // --------------------------------------------------------
+
+    aiInput.setTextToShowWhenEmpty(
+        "Describe a sound: dark space, warm distortion, echo...",
+        juce::Colours::grey);
+
+    aiInput.setColour(
+        juce::TextEditor::backgroundColourId,
+        juce::Colour(0xFF0A0E1A));
+
+    aiInput.setColour(
+        juce::TextEditor::textColourId,
+        juce::Colour(0xFFE0E0E0));
+
+    aiInput.setColour(
+        juce::TextEditor::outlineColourId,
+        NebulaLookAndFeel::getCyan().withAlpha(0.5f));
+
     addAndMakeVisible(aiInput);
 
-    generateBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xFF00E5FF).withAlpha(0.3f));
-    generateBtn.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFF00E5FF));
-    generateBtn.onClick = [this]() {
-        auto text = aiInput.getText().toLowerCase();
-        if (text.contains("space") || text.contains("reverb")) proc.rack.addEffect("reverb");
-        if (text.contains("echo") || text.contains("delay")) proc.rack.addEffect("delay");
-        if (text.contains("warm")) proc.rack.addEffect("distortion");
-        rebuildRackUI();
+    generateBtn.setColour(
+        juce::TextButton::buttonColourId,
+        juce::Colour(0xFF172B3A));
+
+    generateBtn.setColour(
+        juce::TextButton::textColourOffId,
+        NebulaLookAndFeel::getCyan());
+
+    generateBtn.onClick = [this]()
+    {
+        const auto text = aiInput.getText().toLowerCase();
+
+        bool changed = false;
+
+        if (text.contains("reverb") || text.contains("space"))
+            changed |= proc.rack.addEffect("reverb");
+
+        if (text.contains("delay") || text.contains("echo"))
+            changed |= proc.rack.addEffect("delay");
+
+        if (text.contains("distortion") || text.contains("warm"))
+            changed |= proc.rack.addEffect("distortion");
+
+        if (text.contains("chorus"))
+            changed |= proc.rack.addEffect("chorus");
+
+        if (text.contains("phaser"))
+            changed |= proc.rack.addEffect("phaser");
+
+        if (text.contains("compressor"))
+            changed |= proc.rack.addEffect("compressor");
+
+        if (text.contains("bitcrusher") || text.contains("lofi"))
+            changed |= proc.rack.addEffect("bitcrusher");
+
+        if (text.contains("filter"))
+            changed |= proc.rack.addEffect("filter");
+
+        if (changed)
+            rebuildRackUI();
     };
+
     addAndMakeVisible(generateBtn);
 
-    // Мастер-ручки
-    auto setupMaster = [this](juce::Slider& s, juce::Label& l, const juce::String& text,
-                              std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>& att,
-                              const juce::String& id) {
-        s.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
-        s.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 60, 14);
-        l.setText(text, juce::dontSendNotification);
-        l.setJustificationType(juce::Justification::centred);
-        addAndMakeVisible(s); addAndMakeVisible(l);
-        att = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(proc.apvts, id, s);
-    };
-    setupMaster(inputKnob, inputLbl, "INPUT", aIn, "INPUT");
-    setupMaster(mixKnob, mixLbl, "MIX", aMix, "MIX");
-    setupMaster(outputKnob, outputLbl, "OUTPUT", aOut, "OUTPUT");
+    // --------------------------------------------------------
+    // MASTER CONTROLS
+    // --------------------------------------------------------
 
+    auto setupMaster = [this](
+        juce::Slider& slider,
+        juce::Label& label,
+        const juce::String& title,
+        std::unique_ptr<
+            juce::AudioProcessorValueTreeState::SliderAttachment
+        >& attachment,
+        const juce::String& parameterID)
+    {
+        slider.setSliderStyle(
+            juce::Slider::RotaryHorizontalVerticalDrag);
+
+        slider.setTextBoxStyle(
+            juce::Slider::TextBoxBelow,
+            false,
+            58,
+            15);
+
+        label.setText(
+            title,
+            juce::dontSendNotification);
+
+        label.setJustificationType(
+            juce::Justification::centred);
+
+        label.setColour(
+            juce::Label::textColourId,
+            NebulaLookAndFeel::getCyan());
+
+        addAndMakeVisible(slider);
+        addAndMakeVisible(label);
+
+        attachment =
+            std::make_unique<
+                juce::AudioProcessorValueTreeState::SliderAttachment
+            >(
+                proc.apvts,
+                parameterID,
+                slider);
+    };
+
+    setupMaster(
+        inputKnob,
+        inputLbl,
+        "INPUT",
+        aIn,
+        "INPUT");
+
+    setupMaster(
+        mixKnob,
+        mixLbl,
+        "GLOBAL MIX",
+        aMix,
+        "MIX");
+
+    setupMaster(
+        outputKnob,
+        outputLbl,
+        "OUTPUT",
+        aOut,
+        "OUTPUT");
+
+    // Initial rack display.
     rebuildRackUI();
+
+    // Detect rack changes made outside this editor,
+    // for example when a preset is loaded.
+    startTimerHz(5);
 }
 
-NebulaAudioProcessorEditor::~NebulaAudioProcessorEditor() { setLookAndFeel(nullptr); }
+NebulaAudioProcessorEditor::~NebulaAudioProcessorEditor()
+{
+    stopTimer();
+    setLookAndFeel(nullptr);
+}
 
 void NebulaAudioProcessorEditor::paint(juce::Graphics& g)
 {
-    g.setGradientFill(juce::ColourGradient(juce::Colour(0xFF0A0E1A), 0, 0,
-                                           juce::Colour(0xFF1A1F2E), 0, (float)getHeight(), false));
+    juce::ColourGradient gradient(
+        juce::Colour(0xFF080B14),
+        0.0f,
+        0.0f,
+        juce::Colour(0xFF1A2030),
+        0.0f,
+        static_cast<float>(getHeight()),
+        false);
+
+    g.setGradientFill(gradient);
     g.fillAll();
+
     g.setColour(NebulaLookAndFeel::getCyan());
-    g.setFont(juce::Font(juce::FontOptions(22.0f, juce::Font::bold)));
-    g.drawText("NEBULA", getWidth() - 150, 5, 130, 30, juce::Justification::centredRight);
+
+    g.setFont(
+        juce::Font(juce::FontOptions(23.0f, juce::Font::bold)));
+
+    g.drawText(
+        "NEBULA",
+        getWidth() - 160,
+        5,
+        145,
+        30,
+        juce::Justification::centredRight);
+
+    g.setColour(
+        NebulaLookAndFeel::getViolet().withAlpha(0.5f));
+
+    g.drawHorizontalLine(
+        39,
+        10.0f,
+        static_cast<float>(getWidth() - 10));
 }
 
 void NebulaAudioProcessorEditor::resized()
 {
     auto area = getLocalBounds().reduced(10);
 
-    // PresetBar
-    presetBar.setBounds(area.removeFromTop(30));
+    // Header / preset bar.
+    presetBar.setBounds(
+        area.removeFromTop(30));
+
     area.removeFromTop(8);
 
-    // Reels + Spectrum
+    // Reels and spectrum.
     auto visualRow = area.removeFromTop(140);
-    leftReel.setBounds(visualRow.removeFromLeft(120).reduced(10));
-    rightReel.setBounds(visualRow.removeFromRight(120).reduced(10));
-    spectrum.setBounds(visualRow.reduced(10, 0));
+
+    leftReel.setBounds(
+        visualRow.removeFromLeft(120).reduced(8));
+
+    rightReel.setBounds(
+        visualRow.removeFromRight(120).reduced(8));
+
+    spectrum.setBounds(
+        visualRow.reduced(8, 0));
+
     area.removeFromTop(8);
 
-    // Rack
-    auto rackArea = area.removeFromTop(210);
+    // Effect rack.
+    auto rackArea = area.removeFromTop(
+        juce::jmax(150, area.getHeight() - 175));
+
     rackViewport.setBounds(rackArea);
-    rackContent.setSize(rackArea.getWidth() - 12, (int)effectCards.size() * 60);
+
+    const int rackWidth =
+        juce::jmax(100, rackArea.getWidth() - 14);
+
+    const int cardHeight = 72;
+
+    rackContent.setSize(
+        rackWidth,
+        juce::jmax(
+            rackArea.getHeight(),
+            static_cast<int>(effectCards.size()) * cardHeight));
+
     for (size_t i = 0; i < effectCards.size(); ++i)
-        effectCards[i]->setBounds(0, (int)i * 60, rackContent.getWidth(), 55);
-    area.removeFromTop(8);
+    {
+        effectCards[i]->setBounds(
+            0,
+            static_cast<int>(i) * cardHeight,
+            rackWidth,
+            66);
+    }
 
-    // AI
+    area.removeFromTop(7);
+
+    // Generator row.
     auto aiRow = area.removeFromTop(32);
-    generateBtn.setBounds(aiRow.removeFromRight(100));
-    aiRow.removeFromRight(6);
-    aiInput.setBounds(aiRow);
-    area.removeFromTop(6);
 
-    // Мастер-ручки
-    auto masterRow = area.removeFromTop(60);
-    int kw = masterRow.getWidth() / 3;
-    auto pos = [](juce::Slider& s, juce::Label& l, juce::Rectangle<int> r) {
-        l.setBounds(r.removeFromTop(14)); s.setBounds(r);
+    generateBtn.setBounds(
+        aiRow.removeFromRight(105));
+
+    aiRow.removeFromRight(7);
+
+    aiInput.setBounds(aiRow);
+
+    area.removeFromTop(5);
+
+    // Master controls.
+    auto masterRow = area.removeFromTop(
+        juce::jmin(76, area.getHeight()));
+
+    const int knobWidth =
+        masterRow.getWidth() / 3;
+
+    auto placeMaster = [](
+        juce::Slider& slider,
+        juce::Label& label,
+        juce::Rectangle<int> bounds)
+    {
+        bounds = bounds.reduced(8, 0);
+
+        label.setBounds(
+            bounds.removeFromTop(15));
+
+        slider.setBounds(bounds);
     };
-    pos(inputKnob, inputLbl, masterRow.removeFromLeft(kw).reduced(10));
-    pos(mixKnob, mixLbl, masterRow.removeFromLeft(kw).reduced(10));
-    pos(outputKnob, outputLbl, masterRow.removeFromLeft(kw).reduced(10));
+
+    placeMaster(
+        inputKnob,
+        inputLbl,
+        masterRow.removeFromLeft(knobWidth));
+
+    placeMaster(
+        mixKnob,
+        mixLbl,
+        masterRow.removeFromLeft(knobWidth));
+
+    placeMaster(
+        outputKnob,
+        outputLbl,
+        masterRow);
 }
+
+
+// ============================================================
+// RACK UI
+// ============================================================
 
 void NebulaAudioProcessorEditor::rebuildRackUI()
 {
     effectCards.clear();
     rackContent.removeAllChildren();
-    for (int i = 0; i < proc.rack.size(); ++i) {
-        if (auto* fx = proc.rack.get(i)) {
-            auto card = std::make_unique<EffectCard>(*fx, proc);
-            rackContent.addAndMakeVisible(*card);
-            effectCards.push_back(std::move(card));
-        }
+
+    const int count = proc.rack.size();
+
+    for (int i = 0; i < count; ++i)
+    {
+        Rack::EffectInfo info;
+
+        if (!proc.rack.getEffectInfo(i, info))
+            continue;
+
+        auto card = std::make_unique<EffectCard>(
+            proc.rack,
+            i,
+            info);
+
+        rackContent.addAndMakeVisible(*card);
+
+        effectCards.push_back(std::move(card));
     }
+
+    lastRackRevision = proc.rack.getRevision();
+
     resized();
+}
+
+void NebulaAudioProcessorEditor::timerCallback()
+{
+    const auto currentRevision =
+        proc.rack.getRevision();
+
+    if (currentRevision != lastRackRevision)
+        rebuildRackUI();
 }
