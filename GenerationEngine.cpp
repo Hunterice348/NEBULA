@@ -9,8 +9,10 @@ bool GenerationEngine::containsAny(
     std::initializer_list<const char*> words)
 {
     for (const auto* word : words)
+    {
         if (text.contains(juce::String(word)))
             return true;
+    }
 
     return false;
 }
@@ -49,7 +51,7 @@ GenerationOutput GenerationEngine::generate(
     });
 
     const bool techno = containsAny(text, {
-        "techno", "ebm", "техно", "индастриал"
+        "techno", "ebm", "техно"
     });
 
     const bool wide = containsAny(text, {
@@ -62,8 +64,7 @@ GenerationOutput GenerationEngine::generate(
     });
 
     bool reverb = containsAny(text, {
-        "reverb", "space", "hall",
-        "реверб", "пространств", "зал"
+        "reverb", "реверб"
     });
 
     bool delay = containsAny(text, {
@@ -89,16 +90,14 @@ GenerationOutput GenerationEngine::generate(
     });
 
     bool bitcrusher = containsAny(text, {
-        "bitcrusher", "crusher", "lofi",
-        "биткрашер", "биткраш", "лоуфай"
+        "bitcrusher", "crusher", "биткрашер",
+        "биткраш"
     });
 
     bool filter = containsAny(text, {
         "filter", "lowpass", "highpass",
         "фильтр", "срез"
     });
-
-    // PROFILE RULES
 
     if (dark)
     {
@@ -146,8 +145,6 @@ GenerationOutput GenerationEngine::generate(
         compressor = true;
     }
 
-    // BUILD RACK
-
     auto addEffect = [&output](
         const juce::String& id,
         std::initializer_list<float> params,
@@ -160,7 +157,7 @@ GenerationOutput GenerationEngine::generate(
 
         int index = 0;
 
-        for (float value : params)
+        for (const float value : params)
         {
             effect.setProperty(
                 "p" + juce::String(index++),
@@ -172,8 +169,6 @@ GenerationOutput GenerationEngine::generate(
         output.effectNames.add(id.toUpperCase());
     };
 
-    // FILTER
-
     if (filter)
     {
         addEffect("filter", {
@@ -181,8 +176,6 @@ GenerationOutput GenerationEngine::generate(
             aggressive ? 0.48f : 0.22f
         }, 1.0f);
     }
-
-    // COMPRESSOR
 
     if (compressor)
     {
@@ -192,8 +185,6 @@ GenerationOutput GenerationEngine::generate(
             aggressive ? 0.12f : 0.35f
         }, 1.0f);
     }
-
-    // DISTORTION
 
     if (distortion)
     {
@@ -206,8 +197,6 @@ GenerationOutput GenerationEngine::generate(
         }, 0.85f);
     }
 
-    // BITCRUSHER
-
     if (bitcrusher)
     {
         addEffect("bitcrusher", {
@@ -216,8 +205,6 @@ GenerationOutput GenerationEngine::generate(
         }, 0.72f);
     }
 
-    // CHORUS
-
     if (chorus)
     {
         addEffect("chorus", {
@@ -225,8 +212,6 @@ GenerationOutput GenerationEngine::generate(
             wide ? 0.82f : 0.55f
         }, 0.75f);
     }
-
-    // PHASER
 
     if (phaser)
     {
@@ -237,8 +222,6 @@ GenerationOutput GenerationEngine::generate(
         }, 0.70f);
     }
 
-    // DELAY
-
     if (delay)
     {
         addEffect("delay", {
@@ -246,8 +229,6 @@ GenerationOutput GenerationEngine::generate(
             ambient ? 0.42f : 0.25f
         }, ambient ? 0.78f : 0.65f);
     }
-
-    // REVERB
 
     if (reverb)
     {
@@ -264,8 +245,9 @@ GenerationOutput GenerationEngine::generate(
     if (!output.success)
     {
         output.summary =
-            "No profile found. Try dark industrial techno, "
-            "ambient space, lofi distortion or wide stereo.";
+            "No sound profile detected. Try: "
+            "dark industrial techno, ambient space, "
+            "lofi distortion or wide stereo.";
 
         return output;
     }
