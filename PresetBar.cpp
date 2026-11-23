@@ -1,5 +1,6 @@
 
 #include "PresetBar.h"
+#include <memory>
 
 // ============================================================
 // CONSTRUCTOR
@@ -22,8 +23,13 @@ PresetBar::PresetBar(PresetManager& pm)
     delBtn.addListener(this);
     presetBox.addListener(this);
 
-    dataBtn.setTooltip(
-        "Choose the NEBULA user data location");
+    prevBtn.setButtonText("<");
+    nextBtn.setButtonText(">");
+    dataBtn.setButtonText("DATA");
+    saveBtn.setButtonText("SAVE");
+    delBtn.setButtonText("DEL");
+
+    dataBtn.setTooltip("Choose the NEBULA user data location");
 
     const auto cyan = juce::Colour(0xFF00E5FF);
     const auto background = juce::Colour(0xFF0A0E1A);
@@ -226,10 +232,11 @@ void PresetBar::buttonClicked(
 
 void PresetBar::showSaveDialog()
 {
-    auto* window = new juce::AlertWindow(
-        "Save Preset",
-        "Enter a preset name:",
-        juce::MessageBoxIconType::NoIcon);
+    auto window =
+        std::make_shared<juce::AlertWindow>(
+            "Save Preset",
+            "Enter a preset name:",
+            juce::MessageBoxIconType::NoIcon);
 
     window->addTextEditor(
         "name",
@@ -262,7 +269,7 @@ void PresetBar::showSaveDialog()
                 if (name.isNotEmpty())
                     safeThis->presetManager.savePreset(name);
             }),
-        true);
+        false);
 }
 
 // ============================================================
@@ -277,6 +284,10 @@ void PresetBar::showDeleteConfirm()
     if (name.isEmpty()
         || presetManager.isFactoryPreset(name))
     {
+        showStorageMessage(
+            "Delete Preset",
+            "Factory presets cannot be deleted.");
+
         return;
     }
 
@@ -288,8 +299,8 @@ void PresetBar::showDeleteConfirm()
                 juce::MessageBoxIconType::QuestionIcon)
             .withTitle("Delete Preset")
             .withMessage("Delete \"" + name + "\"?")
-            .withButton("Delete")
-            .withButton("Cancel"),
+            .withButton("Delete", 1)
+            .withButton("Cancel", 0),
 
         [safeThis, name](int result)
         {
@@ -315,7 +326,7 @@ void PresetBar::showStorageMessage(
                 juce::MessageBoxIconType::InfoIcon)
             .withTitle(title)
             .withMessage(message)
-            .withButton("OK"));
+            .withButton("OK", 0));
 }
 
 // ============================================================
@@ -353,8 +364,6 @@ void PresetBar::showStorageChooser()
             if (!selectedParent.isDirectory())
                 return;
 
-            // The final destination is:
-            // selected folder / NEBULA
             const auto destination =
                 selectedParent.getChildFile("NEBULA");
 
