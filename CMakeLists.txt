@@ -1,4 +1,3 @@
-
 cmake_minimum_required(VERSION 3.22)
 
 project(NEBULA VERSION 0.3.0 LANGUAGES C CXX)
@@ -63,6 +62,9 @@ target_sources(NebulaMultiFX PRIVATE
 
     FXCommandEngine.cpp
     FXCommandEngine.h
+
+    AIPlan.cpp
+    AIPlan.h
 )
 
 target_compile_features(NebulaMultiFX PRIVATE cxx_std_17)
