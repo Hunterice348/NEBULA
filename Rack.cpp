@@ -1,3 +1,4 @@
+
 #include "Rack.h"
 
 namespace
@@ -30,14 +31,18 @@ void Rack::prepare(double newSampleRate, int newBlockSize)
     sampleRate = juce::jmax(1.0, newSampleRate);
     blockSize = juce::jmax(1, newBlockSize);
 
+    // Called by the host during preparation, normally while audio is stopped.
     for (auto& effect : effects)
-        effect->prepare(sampleRate, blockSize);
+    {
+        if (effect != nullptr)
+            effect->prepare(sampleRate, blockSize);
+    }
 }
 
 void Rack::process(juce::AudioBuffer<float>& buffer)
 {
-    // Audio thread never waits for the UI thread.
-    // If the rack is being modified, this block passes through unchanged.
+    // Never wait on the audio thread.
+    // A later ownership-handoff stage will remove this try-lock fallback.
     juce::SpinLock::ScopedTryLockType lock(rackLock);
 
     if (!lock.isLocked())
@@ -97,7 +102,12 @@ bool Rack::setEffectEnabled(int index, bool enabled)
     if (index < 0 || index >= static_cast<int>(effects.size()))
         return false;
 
-    effects[static_cast<size_t>(index)]->setEnabled(enabled);
+    auto& effect = effects[static_cast<size_t>(index)];
+
+    if (effect == nullptr)
+        return false;
+
+    effect->setEnabled(enabled);
     return true;
 }
 
@@ -108,7 +118,12 @@ bool Rack::setEffectMix(int index, float mix)
     if (index < 0 || index >= static_cast<int>(effects.size()))
         return false;
 
-    effects[static_cast<size_t>(index)]->setMix(mix);
+    auto& effect = effects[static_cast<size_t>(index)];
+
+    if (effect == nullptr)
+        return false;
+
+    effect->setMix(mix);
     return true;
 }
 
@@ -120,6 +135,9 @@ bool Rack::setEffectParameter(int index, int parameter, float value)
         return false;
 
     auto& effect = effects[static_cast<size_t>(index)];
+
+    if (effect == nullptr)
+        return false;
 
     if (parameter < 0 || parameter >= effect->getNumParams())
         return false;
@@ -160,15 +178,35 @@ std::unique_ptr<EffectBase> Rack::create(
 
 bool Rack::addEffect(const juce::String& typeID)
 {
+    // Read preparation settings under the lock, but do not construct or
+    // prepare the DSP object while holding the rack lock.
+    double targetSampleRate = 44100.0;
+    int targetBlockSize = 512;
+
+    {
+        RackLock lock(rackLock);
+        targetSampleRate = sampleRate;
+        targetBlockSize = blockSize;
+    }
+
+    auto effect = create(typeID);
+
+    if (effect == nullptr)
+        return false;
+
+    effect->prepare(targetSampleRate, targetBlockSize);
+
     {
         RackLock lock(rackLock);
 
-        auto effect = create(typeID);
+        // The host may have reconfigured the processor while this effect
+        // was being constructed. Re-prepare only if the settings changed.
+        if (targetSampleRate != sampleRate ||
+            targetBlockSize != blockSize)
+        {
+            effect->prepare(sampleRate, blockSize);
+        }
 
-        if (effect == nullptr)
-            return false;
-
-        effect->prepare(sampleRate, blockSize);
         effects.push_back(std::move(effect));
     }
 
@@ -178,26 +216,28 @@ bool Rack::addEffect(const juce::String& typeID)
 
 void Rack::removeEffect(int index)
 {
-    bool changed = false;
+    std::unique_ptr<EffectBase> removedEffect;
 
     {
         RackLock lock(rackLock);
 
-        if (index >= 0 && index < static_cast<int>(effects.size()))
-        {
-            effects.erase(effects.begin() + index);
-            changed = true;
-        }
+        if (index < 0 || index >= static_cast<int>(effects.size()))
+            return;
+
+        auto it = effects.begin() + index;
+
+        // Move ownership out first. The effect destructor runs after
+        // the lock is released.
+        removedEffect = std::move(*it);
+        effects.erase(it);
     }
 
-    if (changed)
-        notifyChanged();
+    removedEffect.reset();
+    notifyChanged();
 }
 
 void Rack::moveEffect(int from, int to)
 {
-    bool changed = false;
-
     {
         RackLock lock(rackLock);
 
@@ -206,26 +246,30 @@ void Rack::moveEffect(int from, int to)
         if (from < 0 || from >= count ||
             to < 0 || to >= count ||
             from == to)
+        {
             return;
+        }
 
         auto effect = std::move(effects[static_cast<size_t>(from)]);
 
         effects.erase(effects.begin() + from);
         effects.insert(effects.begin() + to, std::move(effect));
-
-        changed = true;
     }
 
-    if (changed)
-        notifyChanged();
+    notifyChanged();
 }
 
 void Rack::clearAll()
 {
+    std::vector<std::unique_ptr<EffectBase>> removedEffects;
+
     {
         RackLock lock(rackLock);
-        effects.clear();
+        removedEffects.swap(effects);
     }
+
+    // Destroy all DSP objects outside the rack lock.
+    removedEffects.clear();
 
     notifyChanged();
 }
@@ -264,29 +308,57 @@ void Rack::loadState(const juce::ValueTree& tree)
     if (!tree.isValid() || !tree.hasType("RACK"))
         return;
 
+    double targetSampleRate = 44100.0;
+    int targetBlockSize = 512;
+
+    {
+        RackLock lock(rackLock);
+        targetSampleRate = sampleRate;
+        targetBlockSize = blockSize;
+    }
+
+    // Build and prepare the complete replacement chain outside the lock.
+    std::vector<std::unique_ptr<EffectBase>> newEffects;
+    newEffects.reserve(static_cast<size_t>(tree.getNumChildren()));
+
+    for (int i = 0; i < tree.getNumChildren(); ++i)
+    {
+        const auto child = tree.getChild(i);
+
+        auto effect = create(child.getType().toString());
+
+        if (effect == nullptr)
+            continue;
+
+        effect->prepare(targetSampleRate, targetBlockSize);
+        effect->loadState(child);
+
+        newEffects.push_back(std::move(effect));
+    }
+
+    std::vector<std::unique_ptr<EffectBase>> oldEffects;
+
     {
         RackLock lock(rackLock);
 
-        std::vector<std::unique_ptr<EffectBase>> newEffects;
-        newEffects.reserve(static_cast<size_t>(tree.getNumChildren()));
-
-        for (int i = 0; i < tree.getNumChildren(); ++i)
+        // Reconcile with a host reconfiguration that occurred while the
+        // replacement chain was being built.
+        if (targetSampleRate != sampleRate ||
+            targetBlockSize != blockSize)
         {
-            const auto child = tree.getChild(i);
-
-            auto effect = create(child.getType().toString());
-
-            if (effect == nullptr)
-                continue;
-
-            effect->prepare(sampleRate, blockSize);
-            effect->loadState(child);
-
-            newEffects.push_back(std::move(effect));
+            for (auto& effect : newEffects)
+            {
+                if (effect != nullptr)
+                    effect->prepare(sampleRate, blockSize);
+            }
         }
 
+        oldEffects.swap(effects);
         effects.swap(newEffects);
     }
+
+    // Old DSP objects are destroyed only after the lock is released.
+    oldEffects.clear();
 
     notifyChanged();
 }
