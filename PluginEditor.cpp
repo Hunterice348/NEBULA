@@ -1,3 +1,4 @@
+
 #include "FXCommandEngine.h"
 #include "PluginEditor.h"
 #include "GenerationEngine.h"
@@ -218,7 +219,8 @@ NebulaAudioProcessorEditor::NebulaAudioProcessorEditor(
     // --------------------------------------------------------
 
     aiInput.setTextToShowWhenEmpty(
-        "Describe a sound: dark industrial techno, ambient space...",
+        "Describe a sound or enter an FX command: "
+        "dark industrial techno, add distortion, remove reverb...",
         juce::Colours::grey);
 
     aiInput.setColour(
@@ -245,25 +247,61 @@ NebulaAudioProcessorEditor::NebulaAudioProcessorEditor(
 
     generateBtn.onClick = [this]()
     {
-        const auto result =
-            nebula::GenerationEngine::generate(
-                aiInput.getText());
+        const auto command = aiInput.getText().trim();
 
-        if (!result.success)
+        if (command.isEmpty())
         {
-            aiInput.setTooltip(result.summary);
+            aiInput.setTooltip("Enter a command or describe a sound.");
+            generateBtn.setButtonText("ENTER COMMAND");
             return;
         }
 
-        proc.rack.loadState(result.rackState);
+        // First: try a direct rack command.
+        const auto fxResult =
+            nebula::FXCommandEngine::execute(
+                command,
+                proc.rack.saveState());
+
+        if (fxResult.recognized)
+        {
+            if (fxResult.success && fxResult.changed)
+            {
+                // Rack state is changed on the UI/message thread,
+                // never from the audio processing callback.
+                proc.rack.loadState(fxResult.rackState);
+                rebuildRackUI();
+            }
+
+            aiInput.setTooltip(fxResult.summary);
+
+            generateBtn.setButtonText(
+                fxResult.success
+                    ? "FX UPDATED"
+                    : "NO CHANGE");
+
+            return;
+        }
+
+        // Second: pass non-FX commands to the generation engine.
+        const auto generationResult =
+            nebula::GenerationEngine::generate(command);
+
+        if (!generationResult.success)
+        {
+            aiInput.setTooltip(generationResult.summary);
+            generateBtn.setButtonText("TRY AGAIN");
+            return;
+        }
+
+        proc.rack.loadState(generationResult.rackState);
 
         rebuildRackUI();
 
-        aiInput.setTooltip(result.summary);
+        aiInput.setTooltip(generationResult.summary);
 
         generateBtn.setButtonText(
             "GENERATED: " +
-            juce::String(result.effectNames.size()));
+            juce::String(generationResult.effectNames.size()));
     };
 
     addAndMakeVisible(generateBtn);
