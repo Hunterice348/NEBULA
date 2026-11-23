@@ -1,3 +1,6 @@
+
+#include "DSP/DSPCore.h"
+
 class EffectBase
 {
 public:
@@ -13,7 +16,7 @@ public:
         const int samples = buffer.getNumSamples();
         const int channels = buffer.getNumChannels();
 
-        if (samples <= 0 || channels <= 0)
+        if (samples <= 0 || channels <= 0 || channels > 2)
             return;
 
         if (!enabled.load(std::memory_order_relaxed))
@@ -29,39 +32,49 @@ public:
 
         mixSmoother.setTargetValue(targetMix);
 
+        if (targetMix <= 0.00001f
+            && !mixSmoother.isSmoothing()
+            && mixSmoother.getCurrentValue() <= 0.00001f)
+            return;
+
+        // Сохраняем исходный сигнал и очищаем нечисловые значения.
         for (int ch = 0; ch < channels; ++ch)
         {
             auto* input = buffer.getWritePointer(ch);
 
             for (int i = 0; i < samples; ++i)
             {
-                input[i] = nebula::dsp::sanitizeSample(input[i]);
-                dryBuffer.setSample(ch, i, input[i]);
+                const float clean =
+                    nebula::dsp::sanitizeSample(input[i]);
+
+                input[i] = clean;
+                dryBuffer.setSample(ch, i, clean);
             }
         }
 
+        // DSP-обработка.
         processWet(buffer);
 
-        for (int ch = 0; ch < channels; ++ch)
+        // Важно: smoother продвигается один раз на сэмпл,
+        // а одно и то же значение применяется ко всем каналам.
+        for (int i = 0; i < samples; ++i)
         {
-            auto* wet = buffer.getWritePointer(ch);
-            const auto* dry = dryBuffer.getReadPointer(ch);
+            const float amount = mixSmoother.getNextValue();
 
-            for (int i = 0; i < samples; ++i)
+            for (int ch = 0; ch < channels; ++ch)
             {
-                const float amount = mixSmoother.getNextValue();
+                auto* wet = buffer.getWritePointer(ch);
+                const float dry = dryBuffer.getSample(ch, i);
 
                 const float wetSample =
                     nebula::dsp::sanitizeSample(wet[i]);
 
-                const float drySample =
-                    nebula::dsp::sanitizeSample(dry[i]);
-
                 const float output =
-                    drySample * (1.0f - amount)
+                    dry * (1.0f - amount)
                     + wetSample * amount;
 
-                wet[i] = nebula::dsp::sanitizeSample(output);
+                wet[i] =
+                    nebula::dsp::sanitizeSample(output);
             }
         }
     }
@@ -114,7 +127,7 @@ public:
 
     virtual void loadState(const juce::ValueTree& tree)
     {
-        if (!tree.isValid() || !tree.hasType(getTypeID()))
+        if (!tree.hasType(getTypeID()))
             return;
 
         setEnabled((bool)tree.getProperty("on", true));
@@ -126,9 +139,11 @@ public:
                 "p" + juce::String(i));
 
             if (tree.hasProperty(property))
+            {
                 setParam(
                     i,
                     (float)tree.getProperty(property));
+            }
         }
     }
 
@@ -141,21 +156,22 @@ protected:
         int maxBlockSize,
         int maxChannels = 2)
     {
-        sr = std::isfinite(sampleRate) && sampleRate > 1000.0
+        sr = std::isfinite(sampleRate) && sampleRate > 0.0
             ? sampleRate : 44100.0;
 
         bs = juce::jmax(1, maxBlockSize);
 
+        maxChannels = juce::jlimit(1, 2, maxChannels);
+
         dryBuffer.setSize(
-            juce::jmax(1, maxChannels),
+            maxChannels,
             bs,
             false,
             true,
             true);
 
-        mixSmoother.prepare(sr, 15.0);
-        mixSmoother.reset(
-            mixAmount.load(std::memory_order_relaxed));
+        mixSmoother.prepare(sr, 8.0);
+        mixSmoother.setCurrentAndTargetValue(getMix());
     }
 
     std::atomic<bool> enabled { true };
@@ -166,6 +182,6 @@ protected:
 
     juce::AudioBuffer<float> dryBuffer;
 
-private:
+    // Используется только аудиопотоком после prepare().
     nebula::dsp::LinearSmoother mixSmoother;
 };
