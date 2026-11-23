@@ -1,28 +1,28 @@
+
 #include "AIPlan.h"
 
 #include <cmath>
 #include <limits>
+#include <utility>
 
 namespace nebula
 {
-
 namespace
 {
-
 constexpr int minimumPlanVersion = 1;
 constexpr int maximumPlanVersion = AIPlan::currentVersion;
 
 bool isSupportedType(const juce::String& typeID)
 {
-    return AIPlanValidator::getParameterCount(typeID) >= 0;
+    return AIPlanValidator::getParameterCount(
+        typeID.trim().toLowerCase()) >= 0;
 }
 
 juce::String parameterProperty(int index)
 {
     return "p" + juce::String(index);
 }
-
-} // namespace
+}
 
 // ============================================================
 // REPORT
@@ -30,12 +30,9 @@ juce::String parameterProperty(int index)
 
 juce::String AIPlanValidation::getReport() const
 {
-    juce::String report;
-
-    if (success)
-        report = "AI plan validation successful.";
-    else
-        report = "AI plan validation failed.";
+    juce::String report = success
+        ? "AI plan validation successful."
+        : "AI plan validation failed.";
 
     for (const auto& warning : warnings)
         report += "\nWarning: " + warning;
@@ -47,35 +44,32 @@ juce::String AIPlanValidation::getReport() const
 }
 
 // ============================================================
-// EFFECT PARAMETER COUNTS
+// EFFECT PARAMETER COUNTS — ALL 18 EFFECTS
 // ============================================================
 
-int AIPlanValidator::getParameterCount(
-    const juce::String& typeID)
+int AIPlanValidator::getParameterCount(const juce::String& rawTypeID)
 {
-    if (typeID == "reverb")
-        return 3;
+    const auto typeID = rawTypeID.trim().toLowerCase();
 
-    if (typeID == "delay")
-        return 2;
+    if (typeID == "reverb")          return 3;
+    if (typeID == "delay")           return 2;
+    if (typeID == "distortion")      return 2;
+    if (typeID == "chorus")          return 2;
+    if (typeID == "phaser")          return 3;
+    if (typeID == "compressor")      return 3;
+    if (typeID == "bitcrusher")      return 2;
+    if (typeID == "filter")          return 2;
 
-    if (typeID == "distortion")
-        return 2;
-
-    if (typeID == "chorus")
-        return 2;
-
-    if (typeID == "phaser")
-        return 3;
-
-    if (typeID == "compressor")
-        return 3;
-
-    if (typeID == "bitcrusher")
-        return 2;
-
-    if (typeID == "filter")
-        return 2;
+    if (typeID == "stereo_widener")  return 2;
+    if (typeID == "autopan")         return 2;
+    if (typeID == "noise_gate")      return 2;
+    if (typeID == "transient")       return 2;
+    if (typeID == "tremolo")         return 2;
+    if (typeID == "ring_mod")        return 2;
+    if (typeID == "comb_filter")     return 2;
+    if (typeID == "tape_saturation") return 2;
+    if (typeID == "lofi")            return 2;
+    if (typeID == "haas_delay")      return 2;
 
     return -1;
 }
@@ -94,12 +88,9 @@ bool AIPlanValidator::readNumber(
     if (!value.isInt()
         && !value.isInt64()
         && !value.isDouble())
-    {
         return false;
-    }
 
     result = static_cast<double>(value);
-
     return std::isfinite(result);
 }
 
@@ -132,27 +123,21 @@ bool AIPlanValidator::validate(
         errors.add(
             "Unsupported plan version: "
             + juce::String(plan.version));
-
         return false;
     }
 
-    if (plan.effects.size()
-        > static_cast<size_t>(maximumEffects))
+    if (plan.effects.size() > static_cast<size_t>(maximumEffects))
     {
         errors.add(
             "The plan exceeds the maximum number of effects ("
-            + juce::String(maximumEffects)
-            + ").");
-
+            + juce::String(maximumEffects) + ").");
         return false;
     }
 
     if (plan.description.length() > 512)
     {
         plan.description = plan.description.substring(0, 512);
-
-        warnings.add(
-            "Description was truncated to 512 characters.");
+        warnings.add("Description was truncated to 512 characters.");
     }
 
     for (size_t effectIndex = 0;
@@ -171,85 +156,62 @@ bool AIPlanValidator::validate(
         if (!isSupportedType(effect.typeID))
         {
             errors.add(
-                prefix
-                + "unsupported effect type '"
-                + effect.typeID
-                + "'.");
-
+                prefix + "unsupported effect type '" + effect.typeID + "'.");
             continue;
         }
 
-        if (!std::isfinite(effect.mix))
+        if (!std::isfinite(effect.mix)
+            || effect.mix < 0.0f
+            || effect.mix > 1.0f)
         {
-            errors.add(prefix + "mix is not finite.");
+            errors.add(prefix + "mix must be finite and between 0.0 and 1.0.");
             continue;
         }
 
-        if (effect.mix < 0.0f || effect.mix > 1.0f)
-        {
-            errors.add(
-                prefix
-                + "mix must be between 0.0 and 1.0.");
-
-            continue;
-        }
-
-        const int expectedParameters =
-            getParameterCount(effect.typeID);
+        const int expectedParameters = getParameterCount(effect.typeID);
 
         if (effect.parameters.size()
             != static_cast<size_t>(expectedParameters))
         {
             errors.add(
                 prefix
-                + "expected "
-                + juce::String(expectedParameters)
+                + "expected " + juce::String(expectedParameters)
                 + " parameters, received "
-                + juce::String(
-                    static_cast<int>(effect.parameters.size()))
+                + juce::String(static_cast<int>(effect.parameters.size()))
                 + ".");
-
             continue;
         }
+
+        bool parametersValid = true;
 
         for (size_t parameterIndex = 0;
              parameterIndex < effect.parameters.size();
              ++parameterIndex)
         {
-            const float value =
-                effect.parameters[parameterIndex];
+            const float value = effect.parameters[parameterIndex];
 
-            if (!std::isfinite(value))
+            if (!std::isfinite(value) || value < 0.0f || value > 1.0f)
             {
                 errors.add(
                     prefix
                     + "parameter "
-                    + juce::String(
-                        static_cast<int>(parameterIndex))
-                    + " is not finite.");
+                    + juce::String(static_cast<int>(parameterIndex))
+                    + " must be finite and between 0.0 and 1.0.");
 
-                break;
-            }
-
-            if (value < 0.0f || value > 1.0f)
-            {
-                errors.add(
-                    prefix
-                    + "parameter "
-                    + juce::String(
-                        static_cast<int>(parameterIndex))
-                    + " must be between 0.0 and 1.0.");
-
+                parametersValid = false;
                 break;
             }
         }
+
+        if (!parametersValid)
+            continue;
     }
 
     return errors.isEmpty();
 }
 
 // ============================================================
-// JSON PARSING
+// JSON PARSING — JUCE 8 COMPATIBLE
 // ============================================================
 
 AIPlanValidation AIPlanValidator::parseAndValidate(
@@ -267,28 +229,25 @@ AIPlanValidation AIPlanValidator::parseAndValidate(
     {
         result.errors.add(
             "Input JSON exceeds the 65536 character limit.");
-
         return result;
     }
 
-    juce::Result parseResult;
-
-    const juce::var root =
-        juce::JSON::parse(json, &parseResult);
+    // JUCE 8 API:
+    // JSON::parse(text, destinationVar) returns juce::Result.
+    // The old JSON::parse(text, &result) form is invalid.
+    juce::var root;
+    const juce::Result parseResult = juce::JSON::parse(json, root);
 
     if (parseResult.failed())
     {
         result.errors.add(
             "Invalid JSON: " + parseResult.getErrorMessage());
-
         return result;
     }
 
     if (!root.isObject())
     {
-        result.errors.add(
-            "The JSON root must be an object.");
-
+        result.errors.add("The JSON root must be an object.");
         return result;
     }
 
@@ -296,27 +255,18 @@ AIPlanValidation AIPlanValidator::parseAndValidate(
 
     if (object == nullptr)
     {
-        result.errors.add(
-            "The JSON root object is unavailable.");
-
+        result.errors.add("The JSON root object is unavailable.");
         return result;
     }
 
-    // --------------------------------------------------------
     // VERSION
-    // --------------------------------------------------------
-
-    const juce::var versionValue =
-        object->getProperty("version");
-
+    const juce::var versionValue = object->getProperty("version");
     double versionNumber = 0.0;
 
     if (!readNumber(versionValue, versionNumber)
         || std::floor(versionNumber) != versionNumber)
     {
-        result.errors.add(
-            "The 'version' field must be an integer.");
-
+        result.errors.add("The 'version' field must be an integer.");
         return result;
     }
 
@@ -326,17 +276,12 @@ AIPlanValidation AIPlanValidator::parseAndValidate(
         result.errors.add(
             "Unsupported JSON plan version: "
             + juce::String(versionNumber));
-
         return result;
     }
 
-    result.plan.version =
-        static_cast<int>(versionNumber);
+    result.plan.version = static_cast<int>(versionNumber);
 
-    // --------------------------------------------------------
     // DESCRIPTION
-    // --------------------------------------------------------
-
     const juce::var descriptionValue =
         object->getProperty("description");
 
@@ -346,37 +291,26 @@ AIPlanValidation AIPlanValidator::parseAndValidate(
         {
             result.errors.add(
                 "The 'description' field must be a string.");
-
             return result;
         }
 
-        result.plan.description =
-            descriptionValue.toString();
+        result.plan.description = descriptionValue.toString();
     }
 
-    // --------------------------------------------------------
     // EFFECTS ARRAY
-    // --------------------------------------------------------
-
-    const juce::var effectsValue =
-        object->getProperty("effects");
+    const juce::var effectsValue = object->getProperty("effects");
 
     if (!effectsValue.isArray())
     {
-        result.errors.add(
-            "The 'effects' field must be an array.");
-
+        result.errors.add("'effects' must be an array.");
         return result;
     }
 
-    const auto* effectsArray =
-        effectsValue.getArray();
+    const auto* effectsArray = effectsValue.getArray();
 
     if (effectsArray == nullptr)
     {
-        result.errors.add(
-            "The effects array is unavailable.");
-
+        result.errors.add("The effects array is unavailable.");
         return result;
     }
 
@@ -384,153 +318,116 @@ AIPlanValidation AIPlanValidator::parseAndValidate(
     {
         result.errors.add(
             "The plan contains too many effects. Maximum: "
-            + juce::String(maximumEffects)
-            + ".");
-
+            + juce::String(maximumEffects) + ".");
         return result;
     }
 
-    // --------------------------------------------------------
     // EFFECT OBJECTS
-    // --------------------------------------------------------
-
-    for (int index = 0;
-         index < effectsArray->size();
-         ++index)
+    for (int index = 0; index < effectsArray->size(); ++index)
     {
-        const juce::var effectValue =
-            effectsArray->getReference(index);
+        const juce::var effectValue = effectsArray->getReference(index);
 
         if (!effectValue.isObject())
         {
             result.errors.add(
-                "Effect "
-                + juce::String(index + 1)
+                "Effect " + juce::String(index + 1)
                 + " must be a JSON object.");
-
             return result;
         }
 
-        const auto* effectObject =
-            effectValue.getDynamicObject();
+        const auto* effectObject = effectValue.getDynamicObject();
 
         if (effectObject == nullptr)
         {
             result.errors.add(
-                "Effect "
-                + juce::String(index + 1)
+                "Effect " + juce::String(index + 1)
                 + " object is unavailable.");
-
             return result;
         }
 
         AIPlanEffect effect;
 
-        // Type
-        const juce::var typeValue =
-            effectObject->getProperty("type");
+        // TYPE
+        const juce::var typeValue = effectObject->getProperty("type");
 
         if (!typeValue.isString())
         {
             result.errors.add(
-                "Effect "
-                + juce::String(index + 1)
+                "Effect " + juce::String(index + 1)
                 + " requires a string 'type' field.");
-
             return result;
         }
 
-        effect.typeID =
-            typeValue.toString().trim().toLowerCase();
+        effect.typeID = typeValue.toString().trim().toLowerCase();
 
         if (!isSupportedType(effect.typeID))
         {
             result.errors.add(
-                "Unsupported effect type: "
-                + effect.typeID);
-
+                "Unsupported effect type: " + effect.typeID);
             return result;
         }
 
-        // Enabled
+        // ENABLED
         const juce::var enabledValue =
             effectObject->getProperty("enabled");
 
-        if (!enabledValue.isVoid())
+        if (!enabledValue.isVoid()
+            && !readBoolean(enabledValue, effect.enabled))
         {
-            if (!readBoolean(
-                    enabledValue,
-                    effect.enabled))
-            {
-                result.errors.add(
-                    "Effect "
-                    + juce::String(index + 1)
-                    + " field 'enabled' must be boolean.");
-
-                return result;
-            }
+            result.errors.add(
+                "Effect " + juce::String(index + 1)
+                + " field 'enabled' must be boolean.");
+            return result;
         }
 
-        // Mix
-        const juce::var mixValue =
-            effectObject->getProperty("mix");
+        // MIX
+        const juce::var mixValue = effectObject->getProperty("mix");
 
         if (!mixValue.isVoid())
         {
             double number = 0.0;
 
-            if (!readNumber(mixValue, number))
+            if (!readNumber(mixValue, number)
+                || number < 0.0
+                || number > 1.0)
             {
                 result.errors.add(
-                    "Effect "
-                    + juce::String(index + 1)
-                    + " field 'mix' must be numeric.");
-
+                    "Effect " + juce::String(index + 1)
+                    + " field 'mix' must be between 0.0 and 1.0.");
                 return result;
             }
 
             effect.mix = static_cast<float>(number);
         }
 
-        // Parameters
+        // PARAMETERS
         const juce::var parametersValue =
             effectObject->getProperty("parameters");
 
         if (!parametersValue.isArray())
         {
             result.errors.add(
-                "Effect "
-                + juce::String(index + 1)
+                "Effect " + juce::String(index + 1)
                 + " requires a 'parameters' array.");
-
             return result;
         }
 
-        const auto* parametersArray =
-            parametersValue.getArray();
+        const auto* parametersArray = parametersValue.getArray();
 
         if (parametersArray == nullptr)
         {
-            result.errors.add(
-                "Effect parameter array is unavailable.");
-
+            result.errors.add("Effect parameter array is unavailable.");
             return result;
         }
 
-        const int expectedCount =
-            getParameterCount(effect.typeID);
+        const int expectedCount = getParameterCount(effect.typeID);
 
         if (parametersArray->size() != expectedCount)
         {
             result.errors.add(
-                "Effect "
-                + juce::String(index + 1)
-                + " ("
-                + effect.typeID
-                + ") expects "
-                + juce::String(expectedCount)
-                + " parameters.");
-
+                "Effect " + juce::String(index + 1)
+                + " (" + effect.typeID + ") expects "
+                + juce::String(expectedCount) + " parameters.");
             return result;
         }
 
@@ -545,60 +442,40 @@ AIPlanValidation AIPlanValidator::parseAndValidate(
                     number))
             {
                 result.errors.add(
-                    "Effect "
-                    + juce::String(index + 1)
-                    + " parameter "
-                    + juce::String(parameterIndex)
+                    "Effect " + juce::String(index + 1)
+                    + " parameter " + juce::String(parameterIndex)
                     + " must be a finite number.");
-
                 return result;
             }
 
             if (number < 0.0 || number > 1.0)
             {
                 result.errors.add(
-                    "Effect "
-                    + juce::String(index + 1)
-                    + " parameter "
-                    + juce::String(parameterIndex)
+                    "Effect " + juce::String(index + 1)
+                    + " parameter " + juce::String(parameterIndex)
                     + " is outside the 0.0 to 1.0 range.");
-
                 return result;
             }
 
-            effect.parameters.push_back(
-                static_cast<float>(number));
+            effect.parameters.push_back(static_cast<float>(number));
         }
 
-        result.plan.effects.push_back(
-            std::move(effect));
+        result.plan.effects.push_back(std::move(effect));
     }
 
-    // --------------------------------------------------------
     // FINAL VALIDATION
-    // --------------------------------------------------------
-
-    if (!validate(
-            result.plan,
-            result.errors,
-            result.warnings))
-    {
+    if (!validate(result.plan, result.errors, result.warnings))
         return result;
-    }
 
-    result.rackState =
-        toRackState(result.plan);
+    result.rackState = toRackState(result.plan);
 
     if (!result.rackState.isValid())
     {
-        result.errors.add(
-            "Could not create Rack state.");
-
+        result.errors.add("Could not create Rack state.");
         return result;
     }
 
     result.success = true;
-
     return result;
 }
 
@@ -606,21 +483,15 @@ AIPlanValidation AIPlanValidator::parseAndValidate(
 // VALUE TREE CONVERSION
 // ============================================================
 
-juce::ValueTree AIPlanValidator::toRackState(
-    const AIPlan& plan)
+juce::ValueTree AIPlanValidator::toRackState(const AIPlan& plan)
 {
     AIPlan checkedPlan = plan;
 
     juce::StringArray errors;
     juce::StringArray warnings;
 
-    if (!validate(
-            checkedPlan,
-            errors,
-            warnings))
-    {
+    if (!validate(checkedPlan, errors, warnings))
         return {};
-    }
 
     juce::ValueTree rackState("RACK");
 
@@ -628,19 +499,10 @@ juce::ValueTree AIPlanValidator::toRackState(
     {
         juce::ValueTree effectState(effect.typeID);
 
-        effectState.setProperty(
-            "on",
-            effect.enabled,
-            nullptr);
+        effectState.setProperty("on", effect.enabled, nullptr);
+        effectState.setProperty("mix", effect.mix, nullptr);
 
-        effectState.setProperty(
-            "mix",
-            effect.mix,
-            nullptr);
-
-        for (size_t i = 0;
-             i < effect.parameters.size();
-             ++i)
+        for (size_t i = 0; i < effect.parameters.size(); ++i)
         {
             effectState.setProperty(
                 parameterProperty(static_cast<int>(i)),
@@ -648,9 +510,7 @@ juce::ValueTree AIPlanValidator::toRackState(
                 nullptr);
         }
 
-        rackState.appendChild(
-            effectState,
-            nullptr);
+        rackState.appendChild(effectState, nullptr);
     }
 
     return rackState;
@@ -665,7 +525,7 @@ juce::String AIPlanValidator::getSchemaDescription()
     return R"json(
 {
   "version": 1,
-  "description": "Optional short explanation of the generated chain",
+  "description": "Musical explanation of the generated effect chain",
   "effects": [
     {
       "type": "filter",
@@ -678,6 +538,12 @@ juce::String AIPlanValidator::getSchemaDescription()
       "enabled": true,
       "mix": 0.65,
       "parameters": [0.80, 0.42]
+    },
+    {
+      "type": "stereo_widener",
+      "enabled": true,
+      "mix": 0.70,
+      "parameters": [0.75, 0.50]
     },
     {
       "type": "reverb",
