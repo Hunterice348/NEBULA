@@ -1,4 +1,3 @@
-
 cmake_minimum_required(VERSION 3.22)
 
 project(NEBULA VERSION 0.2.0 LANGUAGES C CXX)
@@ -32,22 +31,34 @@ juce_add_plugin(NebulaMultiFX
 target_sources(NebulaMultiFX PRIVATE
     PluginProcessor.cpp
     PluginProcessor.h
+
     Effects.cpp
     Effects.h
+
     Rack.cpp
     Rack.h
+
     PresetManager.cpp
     PresetManager.h
+
     PresetBar.cpp
     PresetBar.h
+
+    StorageManager.cpp
+    StorageManager.h
+
     PluginEditor.cpp
     PluginEditor.h
+
     NebulaLookAndFeel.cpp
     NebulaLookAndFeel.h
+
     ReelComponent.cpp
     ReelComponent.h
+
     SpectrumDisplay.cpp
     SpectrumDisplay.h
+
     SpectrumFrameQueue.h
 )
 
@@ -59,6 +70,7 @@ target_link_libraries(NebulaMultiFX
     PRIVATE
         juce::juce_audio_utils
         juce::juce_dsp
+
     PUBLIC
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags
@@ -102,6 +114,7 @@ target_link_libraries(NebulaInstrument
     PRIVATE
         juce::juce_audio_utils
         juce::juce_dsp
+
     PUBLIC
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags
