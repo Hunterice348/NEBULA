@@ -32,7 +32,6 @@ PresetManager::PresetManager(
     scanUserPresets();
 }
 
-
 // ============================================================
 // FACTORY PRESETS
 // ============================================================
@@ -41,11 +40,7 @@ void PresetManager::buildFactoryPresets()
 {
     factoryPresets =
     {
-        {
-            "Init",
-            {},
-            {}
-        },
+        { "Init", {}, {} },
 
         {
             "Deep Space Pad",
@@ -53,18 +48,12 @@ void PresetManager::buildFactoryPresets()
                 { "reverb.p0", 0.90f },
                 { "reverb.p1", 0.80f },
                 { "reverb.p2", 0.60f },
-
                 { "chorus.p0", 0.20f },
                 { "chorus.p1", 0.60f },
-
                 { "delay.p0", 0.40f },
                 { "delay.p1", 0.55f }
             },
-            {
-                "reverb",
-                "chorus",
-                "delay"
-            }
+            { "reverb", "chorus", "delay" }
         },
 
         {
@@ -72,14 +61,10 @@ void PresetManager::buildFactoryPresets()
             {
                 { "delay.p0", 0.60f },
                 { "delay.p1", 0.75f },
-
                 { "filter.p0", 0.40f },
                 { "filter.p1", 0.80f }
             },
-            {
-                "delay",
-                "filter"
-            }
+            { "delay", "filter" }
         },
 
         {
@@ -87,15 +72,11 @@ void PresetManager::buildFactoryPresets()
             {
                 { "distortion.p0", 0.72f },
                 { "distortion.p1", 0.35f },
-
                 { "compressor.p0", 0.60f },
                 { "compressor.p1", 0.72f },
                 { "compressor.p2", 0.25f }
             },
-            {
-                "distortion",
-                "compressor"
-            }
+            { "distortion", "compressor" }
         },
 
         {
@@ -103,18 +84,12 @@ void PresetManager::buildFactoryPresets()
             {
                 { "bitcrusher.p0", 0.35f },
                 { "bitcrusher.p1", 0.70f },
-
                 { "filter.p0", 0.45f },
                 { "filter.p1", 0.35f },
-
                 { "distortion.p0", 0.25f },
                 { "distortion.p1", 0.60f }
             },
-            {
-                "bitcrusher",
-                "filter",
-                "distortion"
-            }
+            { "bitcrusher", "filter", "distortion" }
         },
 
         {
@@ -123,19 +98,14 @@ void PresetManager::buildFactoryPresets()
                 { "phaser.p0", 0.25f },
                 { "phaser.p1", 0.75f },
                 { "phaser.p2", 0.40f },
-
                 { "reverb.p0", 0.70f },
                 { "reverb.p1", 0.65f },
                 { "reverb.p2", 0.45f }
             },
-            {
-                "phaser",
-                "reverb"
-            }
+            { "phaser", "reverb" }
         }
     };
 }
-
 
 // ============================================================
 // USER PRESET SCANNING
@@ -158,7 +128,6 @@ void PresetManager::scanUserPresets()
 
     userPresets.sort(true);
 }
-
 
 // ============================================================
 // PRESET HELPERS
@@ -193,6 +162,62 @@ bool PresetManager::isFactoryPreset(
     return factoryNames.contains(name);
 }
 
+// ============================================================
+// BUILD FACTORY RACK STATE
+// ============================================================
+
+namespace
+{
+    juce::ValueTree makeFactoryRackState(
+        const std::vector<juce::String>& chain,
+        const std::map<juce::String, float>& parameters)
+    {
+        juce::ValueTree rackTree("RACK");
+
+        for (const auto& type : chain)
+        {
+            juce::ValueTree effectTree(type);
+
+            effectTree.setProperty("on", true, nullptr);
+            effectTree.setProperty("mix", 1.0f, nullptr);
+
+            const juce::String prefix = type + ".p";
+
+            for (const auto& parameter : parameters)
+            {
+                if (!parameter.first.startsWith(prefix))
+                    continue;
+
+                const auto indexText =
+                    parameter.first.fromFirstOccurrenceOf(
+                        prefix,
+                        false,
+                        false);
+
+                // Reject malformed parameter suffixes.
+                if (indexText.isEmpty())
+                    continue;
+
+                const int parameterIndex = indexText.getIntValue();
+
+                if (parameterIndex < 0)
+                    continue;
+
+                if (indexText != juce::String(parameterIndex))
+                    continue;
+
+                effectTree.setProperty(
+                    "p" + juce::String(parameterIndex),
+                    parameter.second,
+                    nullptr);
+            }
+
+            rackTree.appendChild(effectTree, nullptr);
+        }
+
+        return rackTree;
+    }
+}
 
 // ============================================================
 // LOAD PRESET
@@ -213,47 +238,12 @@ bool PresetManager::loadPreset(
         if (preset.name != name)
             continue;
 
-        rack.clearAll();
+        const auto rackState = makeFactoryRackState(
+            preset.chain,
+            preset.params);
 
-        for (const auto& type : preset.chain)
-        {
-            if (!rack.addEffect(type))
-                continue;
-        }
-
-        // Apply effect parameters using the current Rack API.
-        for (int effectIndex = 0;
-             effectIndex < static_cast<int>(preset.chain.size());
-             ++effectIndex)
-        {
-            const auto& type =
-                preset.chain[static_cast<size_t>(effectIndex)];
-
-            const juce::String prefix = type + ".p";
-
-            for (const auto& parameter : preset.params)
-            {
-                if (!parameter.first.startsWith(prefix))
-                    continue;
-
-                const auto parameterIndexText =
-                    parameter.first.fromFirstOccurrenceOf(
-                        prefix,
-                        false,
-                        false);
-
-                const int parameterIndex =
-                    parameterIndexText.getIntValue();
-
-                if (parameterIndex < 0)
-                    continue;
-
-                rack.setEffectParameter(
-                    effectIndex,
-                    parameterIndex,
-                    parameter.second);
-            }
-        }
+        // Replace the complete chain in one Rack operation.
+        rack.loadState(rackState);
 
         currentPresetName = name;
 
@@ -285,13 +275,14 @@ bool PresetManager::loadPreset(
     if (tree.getType() != apvts.state.getType())
         return false;
 
+    const auto rackTree = tree.getChildWithName("RACK");
+
+    // Validate the rack state before changing APVTS.
+    if (!rackTree.isValid())
+        return false;
+
     apvts.replaceState(tree);
-
-    const auto rackTree =
-        tree.getChildWithName("RACK");
-
-    if (rackTree.isValid())
-        rack.loadState(rackTree);
+    rack.loadState(rackTree);
 
     currentPresetName = name;
 
@@ -300,7 +291,6 @@ bool PresetManager::loadPreset(
 
     return true;
 }
-
 
 // ============================================================
 // LOAD BY INDEX
@@ -315,7 +305,6 @@ bool PresetManager::loadPresetByIndex(int index)
 
     return loadPreset(names[index]);
 }
-
 
 // ============================================================
 // SAVE PRESET
@@ -346,11 +335,8 @@ bool PresetManager::savePreset(
     if (xml == nullptr)
         return false;
 
-    if (!presetFile(cleanName).replaceWithText(
-            xml->toString()))
-    {
+    if (!presetFile(cleanName).replaceWithText(xml->toString()))
         return false;
-    }
 
     if (!userPresets.contains(cleanName))
     {
@@ -368,7 +354,6 @@ bool PresetManager::savePreset(
 
     return true;
 }
-
 
 // ============================================================
 // DELETE PRESET
@@ -403,7 +388,6 @@ bool PresetManager::deletePreset(
 
     return true;
 }
-
 
 // ============================================================
 // NEXT / PREVIOUS
