@@ -1,9 +1,12 @@
+
 #pragma once
 
 #include <JuceHeader.h>
 #include "Effects.h"
 
+#include <array>
 #include <atomic>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <vector>
@@ -22,13 +25,13 @@ public:
     };
 
     Rack() = default;
-    ~Rack() = default;
+    ~Rack();
 
     Rack(const Rack&) = delete;
     Rack& operator=(const Rack&) = delete;
 
     void prepare(double sampleRate, int blockSize);
-    void process(juce::AudioBuffer<float>& buffer);
+    void process(juce::AudioBuffer<float>& buffer) noexcept;
 
     int size() const;
     bool getEffectInfo(int index, EffectInfo& result) const;
@@ -55,17 +58,105 @@ public:
     std::function<void()> onChanged;
 
 private:
+    static constexpr size_t queueCapacity = 256;
+    static constexpr size_t queueMask = queueCapacity - 1;
+
+    struct AudioChain;
+
+    enum class CommandType : uint8_t
+    {
+        replaceChain,
+        setEnabled,
+        setMix,
+        setParameter
+    };
+
+    struct Command
+    {
+        CommandType type = CommandType::replaceChain;
+        AudioChain* chain = nullptr;
+
+        int effectIndex = -1;
+        int parameterIndex = -1;
+
+        float value = 0.0f;
+        bool enabled = true;
+    };
+
+    // --------------------------------------------------------
+    // CONTROL THREAD STATE
+    // --------------------------------------------------------
+
     mutable juce::SpinLock rackLock;
 
+    // These objects are control-side prototypes.
+    // They are never processed by the audio thread.
     std::vector<std::unique_ptr<EffectBase>> effects;
 
     double sampleRate = 44100.0;
     int blockSize = 512;
 
+    // --------------------------------------------------------
+    // CONTROL -> AUDIO COMMAND QUEUE
+    // --------------------------------------------------------
+
+    std::array<Command, queueCapacity> commandQueue {};
+
+    std::atomic<size_t> commandWritePosition { 0 };
+    std::atomic<size_t> commandReadPosition { 0 };
+
+    // Serializes all control-side producers.
+    juce::SpinLock commandWriteLock;
+
+    // --------------------------------------------------------
+    // AUDIO -> CONTROL RETIREMENT QUEUE
+    // --------------------------------------------------------
+
+    std::array<AudioChain*, queueCapacity> retiredChains {};
+
+    std::atomic<size_t> retiredWritePosition { 0 };
+    std::atomic<size_t> retiredReadPosition { 0 };
+
+    // Serializes control-side consumers.
+    juce::SpinLock retiredReadLock;
+
+    // --------------------------------------------------------
+    // AUDIO THREAD OWNERSHIP
+    // --------------------------------------------------------
+
+    // Accessed only by the audio thread during processing.
+    AudioChain* activeChain = nullptr;
+
+    // Used if the retirement queue is temporarily full.
+    AudioChain* deferredRetiredChain = nullptr;
+    AudioChain* deferredNewChain = nullptr;
+
+    // --------------------------------------------------------
+    // GENERAL STATE
+    // --------------------------------------------------------
+
     std::atomic<uint64_t> revision { 0 };
 
     std::unique_ptr<EffectBase> create(
         const juce::String& typeID) const;
+
+    std::unique_ptr<AudioChain> buildChain(
+        const std::vector<std::unique_ptr<EffectBase>>& source,
+        double targetSampleRate,
+        int targetBlockSize) const;
+
+    bool publishChain(
+        std::unique_ptr<AudioChain> chain);
+
+    bool publishCurrentChainLocked();
+
+    bool tryPushCommand(const Command& command) noexcept;
+    bool tryPopCommand(Command& command) noexcept;
+
+    bool tryPushRetired(AudioChain* chain) noexcept;
+    bool tryPopRetired(AudioChain*& chain) noexcept;
+
+    void drainRetired();
 
     void notifyChanged();
 };
