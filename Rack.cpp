@@ -1,6 +1,6 @@
-
 #include "Rack.h"
 
+#include <algorithm>
 #include <cmath>
 #include <utility>
 
@@ -27,16 +27,63 @@ struct Rack::AudioChain
 {
     std::vector<std::unique_ptr<EffectBase>> effects;
 
-    void process(juce::AudioBuffer<float>& buffer) noexcept
+    // Splits an arbitrarily large host buffer into blocks no larger
+    // than the size used when the effects were prepared.
+    //
+    // The temporary AudioBuffer references existing channel memory.
+    // It does not own or allocate audio storage.
+    void process(
+        juce::AudioBuffer<float>& buffer,
+        int maximumBlockSize) noexcept
     {
-        for (auto& effect : effects)
-            if (effect != nullptr)
-                effect->process(buffer);
+        const int numSamples = buffer.getNumSamples();
+        const int numChannels = buffer.getNumChannels();
+
+        if (numSamples <= 0 || numChannels <= 0)
+            return;
+
+        // Current effects are prepared for mono/stereo operation.
+        // Do not partially process multichannel buffers.
+        if (numChannels > 2)
+            return;
+
+        const int chunkLimit = juce::jmax(1, maximumBlockSize);
+
+        std::array<float*, 2> channelPointers {};
+
+        for (int startSample = 0;
+             startSample < numSamples;
+             startSample += chunkLimit)
+        {
+            const int currentChunkSize = juce::jmin(
+                chunkLimit,
+                numSamples - startSample);
+
+            for (int channel = 0;
+                 channel < numChannels;
+                 ++channel)
+            {
+                channelPointers[static_cast<size_t>(channel)] =
+                    buffer.getWritePointer(channel, startSample);
+            }
+
+            juce::AudioBuffer<float> block(
+                channelPointers.data(),
+                numChannels,
+                currentChunkSize);
+
+            for (auto& effect : effects)
+            {
+                if (effect != nullptr)
+                    effect->process(block);
+            }
+        }
     }
 
     void setEnabled(int index, bool enabled) noexcept
     {
-        if (index < 0 || index >= static_cast<int>(effects.size()))
+        if (index < 0 ||
+            index >= static_cast<int>(effects.size()))
             return;
 
         auto& effect = effects[static_cast<size_t>(index)];
@@ -47,7 +94,8 @@ struct Rack::AudioChain
 
     void setMix(int index, float value) noexcept
     {
-        if (index < 0 || index >= static_cast<int>(effects.size()))
+        if (index < 0 ||
+            index >= static_cast<int>(effects.size()))
             return;
 
         auto& effect = effects[static_cast<size_t>(index)];
@@ -85,6 +133,7 @@ struct Rack::AudioChain
 Rack::~Rack()
 {
     // The host must stop audio processing before destroying Rack.
+
     drainRetired();
 
     Command command;
@@ -101,7 +150,6 @@ Rack::~Rack()
     delete deferredNewChain;
     deferredNewChain = nullptr;
 
-    // The deferred retired chain may still be the active chain.
     if (deferredRetiredChain == activeChain)
         activeChain = nullptr;
 
@@ -393,12 +441,19 @@ void Rack::process(
 {
     // No SpinLock, heap allocation, or object destruction here.
 
+    if (buffer.getNumSamples() <= 0 ||
+        buffer.getNumChannels() <= 0)
+        return;
+
+    if (buffer.getNumChannels() > 2)
+        return;
+
     if (deferredRetiredChain != nullptr)
     {
         if (!tryPushRetired(deferredRetiredChain))
         {
             if (activeChain != nullptr)
-                activeChain->process(buffer);
+                activeChain->process(buffer, blockSize);
 
             return;
         }
@@ -438,7 +493,7 @@ void Rack::process(
                     deferredNewChain = replacement;
 
                     if (activeChain != nullptr)
-                        activeChain->process(buffer);
+                        activeChain->process(buffer, blockSize);
 
                     return;
                 }
@@ -486,7 +541,7 @@ void Rack::process(
     }
 
     if (activeChain != nullptr)
-        activeChain->process(buffer);
+        activeChain->process(buffer, blockSize);
 }
 
 // ============================================================
