@@ -1,4 +1,29 @@
 
+// ============================================================
+// STORAGE MANAGEMENT
+// ============================================================
+
+juce::File PresetManager::getStorageRoot() const
+{
+    return storageManager.getDataRoot();
+}
+
+bool PresetManager::moveStorageTo(
+    const juce::File& directory)
+{
+    if (!storageManager.moveDataTo(directory))
+        return false;
+
+    presetDir = storageManager.getPresetsDirectory();
+
+    scanUserPresets();
+
+    if (onPresetListChanged)
+        onPresetListChanged();
+
+    return true;
+}
+
 PresetManager::PresetManager(
     juce::AudioProcessorValueTreeState& a,
     Rack& r)
