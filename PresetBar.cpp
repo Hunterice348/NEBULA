@@ -351,8 +351,6 @@ void PresetBar::showDeleteConfirm()
             if (safeThis == nullptr)
                 return;
 
-            // JUCE 8.0.6:
-            // With two buttons, the first button returns 1.
             if (result == 1)
             {
                 const bool deleted =
@@ -382,13 +380,11 @@ void PresetBar::showStorageMessage(
     const juce::String& title,
     const juce::String& message)
 {
-    juce::AlertWindow::showAsync(
-        juce::MessageBoxOptions()
-            .withIconType(
-                juce::MessageBoxIconType::InfoIcon)
-            .withTitle(title)
-            .withMessage(message)
-            .withButton("OK"));
+    juce::AlertWindow::showMessageBoxAsync(
+        juce::MessageBoxIconType::InfoIcon,
+        title,
+        message,
+        "OK");
 }
 
 // ============================================================
