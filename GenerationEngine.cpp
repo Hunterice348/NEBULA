@@ -1,8 +1,8 @@
-
 #include "GenerationEngine.h"
 
 #include <array>
 #include <cmath>
+#include <initializer_list>
 #include <vector>
 
 namespace nebula
@@ -44,16 +44,6 @@ namespace
         bool minimal = false;
     };
 
-    struct EffectPlan
-    {
-        const char* id;
-        float p0;
-        float p1;
-        float p2;
-        float mix;
-        int parameterCount;
-    };
-
     struct EffectFlags
     {
         bool reverb = false;
@@ -64,10 +54,32 @@ namespace
         bool compressor = false;
         bool bitcrusher = false;
         bool filter = false;
+
+        bool stereoWidener = false;
+        bool autoPan = false;
+        bool noiseGate = false;
+        bool transient = false;
+        bool tremolo = false;
+        bool ringMod = false;
+        bool combFilter = false;
+        bool tapeSaturation = false;
+        bool lofi = false;
+        bool haasDelay = false;
     };
 
-    bool has(const juce::String& text,
-             std::initializer_list<const char*> words)
+    struct EffectPlan
+    {
+        const char* id;
+        float p0;
+        float p1;
+        float p2;
+        float mix;
+        int parameterCount;
+    };
+
+    bool has(
+        const juce::String& text,
+        std::initializer_list<const char*> words)
     {
         for (const auto* word : words)
         {
@@ -88,7 +100,7 @@ namespace
 
     Genre detectGenre(const juce::String& text)
     {
-        // More specific genres must be checked first.
+        // Specific genre names must be checked before generic names.
 
         if (has(text, {
             "gothic industrial", "gothic techno",
@@ -173,41 +185,18 @@ namespace
     {
         switch (genre)
         {
-            case Genre::industrialTechno:
-                return "Industrial Techno";
-
-            case Genre::gothicIndustrial:
-                return "Gothic Industrial";
-
-            case Genre::darkAmbient:
-                return "Dark Ambient";
-
-            case Genre::ambient:
-                return "Ambient";
-
-            case Genre::lofiHipHop:
-                return "Lo-Fi Hip-Hop";
-
-            case Genre::hipHop:
-                return "Hip-Hop";
-
-            case Genre::drumAndBass:
-                return "Drum and Bass";
-
-            case Genre::house:
-                return "House";
-
-            case Genre::trance:
-                return "Trance";
-
-            case Genre::cinematic:
-                return "Cinematic";
-
-            case Genre::experimental:
-                return "Experimental";
-
-            default:
-                return {};
+            case Genre::industrialTechno: return "Industrial Techno";
+            case Genre::gothicIndustrial: return "Gothic Industrial";
+            case Genre::darkAmbient: return "Dark Ambient";
+            case Genre::ambient: return "Ambient";
+            case Genre::lofiHipHop: return "Lo-Fi Hip-Hop";
+            case Genre::hipHop: return "Hip-Hop";
+            case Genre::drumAndBass: return "Drum and Bass";
+            case Genre::house: return "House";
+            case Genre::trance: return "Trance";
+            case Genre::cinematic: return "Cinematic";
+            case Genre::experimental: return "Experimental";
+            default: return {};
         }
     }
 
@@ -224,7 +213,7 @@ namespace
             "aggressive", "brutal", "hard",
             "heavy", "violent", "harsh",
             "агрессив", "бруталь", "жестк",
-            "тяжел", "ярост", "злой"
+            "жёстк", "тяжел", "тяжёл", "ярост", "злой"
         });
 
         t.soft = has(text, {
@@ -265,7 +254,7 @@ namespace
         });
 
         t.punchy = has(text, {
-            "punchy", "punch", " удар",
+            "punchy", "punch", "удар",
             "панч", "ударн", "пробивн"
         });
 
@@ -309,6 +298,9 @@ namespace
                 f.compressor = true;
                 f.distortion = true;
                 f.delay = true;
+                f.noiseGate = true;
+                f.transient = true;
+                f.tapeSaturation = true;
                 break;
 
             case Genre::gothicIndustrial:
@@ -317,6 +309,9 @@ namespace
                 f.compressor = true;
                 f.reverb = true;
                 f.phaser = true;
+                f.ringMod = true;
+                f.tapeSaturation = true;
+                f.stereoWidener = true;
                 break;
 
             case Genre::darkAmbient:
@@ -325,6 +320,9 @@ namespace
                 f.delay = true;
                 f.chorus = true;
                 f.phaser = true;
+                f.stereoWidener = true;
+                f.haasDelay = true;
+                f.combFilter = true;
                 break;
 
             case Genre::ambient:
@@ -332,6 +330,8 @@ namespace
                 f.delay = true;
                 f.chorus = true;
                 f.filter = true;
+                f.stereoWidener = true;
+                f.haasDelay = true;
                 break;
 
             case Genre::lofiHipHop:
@@ -339,12 +339,17 @@ namespace
                 f.filter = true;
                 f.distortion = true;
                 f.compressor = true;
+                f.lofi = true;
+                f.tapeSaturation = true;
+                f.noiseGate = true;
                 break;
 
             case Genre::hipHop:
                 f.compressor = true;
                 f.filter = true;
                 f.distortion = true;
+                f.transient = true;
+                f.noiseGate = true;
                 break;
 
             case Genre::drumAndBass:
@@ -352,12 +357,17 @@ namespace
                 f.filter = true;
                 f.distortion = true;
                 f.delay = true;
+                f.transient = true;
+                f.autoPan = true;
                 break;
 
             case Genre::house:
                 f.compressor = true;
                 f.filter = true;
                 f.chorus = true;
+                f.autoPan = true;
+                f.stereoWidener = true;
+                f.noiseGate = true;
                 break;
 
             case Genre::trance:
@@ -365,6 +375,8 @@ namespace
                 f.delay = true;
                 f.reverb = true;
                 f.chorus = true;
+                f.stereoWidener = true;
+                f.autoPan = true;
                 break;
 
             case Genre::cinematic:
@@ -372,6 +384,9 @@ namespace
                 f.delay = true;
                 f.chorus = true;
                 f.phaser = true;
+                f.stereoWidener = true;
+                f.haasDelay = true;
+                f.combFilter = true;
                 break;
 
             case Genre::experimental:
@@ -380,6 +395,10 @@ namespace
                 f.delay = true;
                 f.phaser = true;
                 f.bitcrusher = true;
+                f.ringMod = true;
+                f.combFilter = true;
+                f.tremolo = true;
+                f.lofi = true;
                 break;
 
             default:
@@ -396,6 +415,7 @@ namespace
             f.filter = true;
             f.distortion = true;
             f.reverb = true;
+            f.combFilter = true;
         }
 
         if (t.aggressive)
@@ -403,35 +423,45 @@ namespace
             f.distortion = true;
             f.compressor = true;
             f.filter = true;
+            f.transient = true;
+            f.noiseGate = true;
         }
 
         if (t.soft)
         {
             f.chorus = true;
+            f.tremolo = true;
         }
 
         if (t.wide)
         {
             f.chorus = true;
             f.phaser = true;
+            f.stereoWidener = true;
+            f.haasDelay = true;
         }
 
         if (t.warm)
         {
             f.distortion = true;
             f.compressor = true;
+            f.tapeSaturation = true;
         }
 
         if (t.dirty)
         {
             f.distortion = true;
             f.bitcrusher = true;
+            f.lofi = true;
+            f.tapeSaturation = true;
         }
 
         if (t.spacious)
         {
             f.reverb = true;
             f.delay = true;
+            f.stereoWidener = true;
+            f.haasDelay = true;
         }
 
         if (t.metallic)
@@ -439,6 +469,8 @@ namespace
             f.distortion = true;
             f.phaser = true;
             f.filter = true;
+            f.ringMod = true;
+            f.combFilter = true;
         }
 
         if (t.vintage)
@@ -446,18 +478,41 @@ namespace
             f.bitcrusher = true;
             f.filter = true;
             f.chorus = true;
+            f.lofi = true;
+            f.tapeSaturation = true;
         }
 
         if (t.hypnotic)
         {
             f.delay = true;
             f.phaser = true;
+            f.autoPan = true;
+            f.tremolo = true;
         }
 
         if (t.bright)
         {
             f.filter = true;
             f.chorus = true;
+            f.stereoWidener = true;
+        }
+
+        if (t.punchy)
+            f.transient = true;
+
+        if (t.minimal)
+            f.noiseGate = true;
+
+        if (t.dry)
+        {
+            // Keep the effects available but reduce their wet mix
+            // later in buildEffectPlan().
+        }
+
+        if (t.clean)
+        {
+            f.noiseGate = true;
+            f.compressor = true;
         }
     }
 
@@ -465,32 +520,48 @@ namespace
         const juce::String& text,
         EffectFlags& f)
     {
-        if (has(text, {
-            "reverb", "reverberation",
-            "реверб", "реверберац"
-        }))
+        const bool explicitHaas = has(text, {
+            "haas delay", "haas_delay",
+            "haas effect", "эффект хааса", "хаас задержка"
+        });
+
+        const bool explicitComb = has(text, {
+            "comb filter", "comb_filter",
+            "гребенчатый фильтр", "комб фильтр"
+        });
+
+        const bool explicitTape = has(text, {
+            "tape saturation", "tape_saturation",
+            "tape saturator", "ленточная сатурация",
+            "ленточный перегруз"
+        });
+
+        const bool explicitLofi = has(text, {
+            "lo-fi", "lofi", "lo fi",
+            "лоу фай", "лоуфай", "лоу-фай"
+        });
+
+        if (has(text, { "reverb", "reverberation", "реверб", "реверберац" }))
             f.reverb = true;
 
-        if (has(text, {
-            "delay", "echo", "дилей", "эхо"
-        }))
+        if (has(text, { "delay", "echo", "дилей", "эхо" })
+            && !explicitHaas)
             f.delay = true;
 
         if (has(text, {
             "distortion", "overdrive", "fuzz",
-            "saturation", "искаж", "сатурац",
-            "перегруз"
+            "искаж", "дисторшн", "перегруз"
         }))
             f.distortion = true;
 
-        if (has(text, {
-            "chorus", "хорус"
-        }))
+        if (has(text, { "saturation", "сатурац" })
+            && !explicitTape)
+            f.distortion = true;
+
+        if (has(text, { "chorus", "хорус" }))
             f.chorus = true;
 
-        if (has(text, {
-            "phaser", "фейзер", "фазер"
-        }))
+        if (has(text, { "phaser", "фейзер", "фазер" }))
             f.phaser = true;
 
         if (has(text, {
@@ -508,66 +579,120 @@ namespace
         if (has(text, {
             "filter", "lowpass", "highpass",
             "фильтр", "срез частот"
-        }))
+        }) && !explicitComb)
             f.filter = true;
+
+        if (has(text, {
+            "stereo widener", "stereo_widener",
+            "stereo width", "расширитель стерео",
+            "ширина стерео"
+        }))
+            f.stereoWidener = true;
+
+        if (has(text, {
+            "auto pan", "autopan", "автопан",
+            "автопанорама", "авто панорама"
+        }))
+            f.autoPan = true;
+
+        if (has(text, {
+            "noise gate", "noise_gate", "gate",
+            "шумовой гейт", "гейт"
+        }))
+            f.noiseGate = true;
+
+        if (has(text, {
+            "transient shaper", "transient",
+            "транзиент шейпер", "транзиент"
+        }))
+            f.transient = true;
+
+        if (has(text, { "tremolo", "тремоло" }))
+            f.tremolo = true;
+
+        if (has(text, {
+            "ring modulator", "ring modulation",
+            "ring mod", "ring_mod",
+            "кольцевая модуляция", "ринг модулятор"
+        }))
+            f.ringMod = true;
+
+        if (explicitComb)
+            f.combFilter = true;
+
+        if (explicitTape)
+            f.tapeSaturation = true;
+
+        if (explicitLofi)
+            f.lofi = true;
+
+        if (explicitHaas)
+            f.haasDelay = true;
     }
 
     void applyNegativeCommands(
         const juce::String& text,
         EffectFlags& f)
     {
-        const bool noReverb = has(text, {
-            "no reverb", "without reverb",
-            "remove reverb", "без реверба",
-            "без реверберации", "убери реверб",
-            "убрать реверб"
-        });
+        const auto no = [&text](
+            std::initializer_list<const char*> words)
+        {
+            return has(text, words);
+        };
 
-        const bool noDelay = has(text, {
-            "no delay", "without delay",
-            "без дилея", "без эха",
-            "убери дилей", "убрать дилей"
-        });
+        if (no({ "no reverb", "without reverb", "без реверба", "без реверберации", "убери реверб" }))
+            f.reverb = false;
 
-        const bool noDistortion = has(text, {
-            "no distortion", "without distortion",
-            "без дисторшна", "без искажений",
-            "убери дисторшн"
-        });
+        if (no({ "no delay", "without delay", "без дилея", "без эха", "убери дилей" }))
+            f.delay = false;
 
-        const bool noChorus = has(text, {
-            "no chorus", "without chorus",
-            "без хоруса", "убери хорус"
-        });
+        if (no({ "no distortion", "without distortion", "без дисторшна", "без искажений", "убери дисторшн" }))
+            f.distortion = false;
 
-        const bool noPhaser = has(text, {
-            "no phaser", "without phaser",
-            "без фейзера", "убери фейзер"
-        });
+        if (no({ "no chorus", "without chorus", "без хоруса", "убери хорус" }))
+            f.chorus = false;
 
-        const bool noCompressor = has(text, {
-            "no compressor", "without compressor",
-            "без компрессора", "убери компрессор"
-        });
+        if (no({ "no phaser", "without phaser", "без фейзера", "убери фейзер" }))
+            f.phaser = false;
 
-        const bool noBitcrusher = has(text, {
-            "no bitcrusher", "without bitcrusher",
-            "без биткрашера", "убери биткрашер"
-        });
+        if (no({ "no compressor", "without compressor", "без компрессора", "убери компрессор" }))
+            f.compressor = false;
 
-        const bool noFilter = has(text, {
-            "no filter", "without filter",
-            "без фильтра", "убери фильтр"
-        });
+        if (no({ "no bitcrusher", "without bitcrusher", "без биткрашера", "убери биткрашер" }))
+            f.bitcrusher = false;
 
-        if (noReverb) f.reverb = false;
-        if (noDelay) f.delay = false;
-        if (noDistortion) f.distortion = false;
-        if (noChorus) f.chorus = false;
-        if (noPhaser) f.phaser = false;
-        if (noCompressor) f.compressor = false;
-        if (noBitcrusher) f.bitcrusher = false;
-        if (noFilter) f.filter = false;
+        if (no({ "no filter", "without filter", "без фильтра", "убери фильтр" }))
+            f.filter = false;
+
+        if (no({ "no stereo widener", "without stereo widener", "без расширителя стерео", "убери расширение стерео" }))
+            f.stereoWidener = false;
+
+        if (no({ "no autopan", "no auto pan", "без автопана", "убери автопан" }))
+            f.autoPan = false;
+
+        if (no({ "no noise gate", "без гейта", "убери гейт" }))
+            f.noiseGate = false;
+
+        if (no({ "no transient", "без транзиента", "убери транзиент" }))
+            f.transient = false;
+
+        if (no({ "no tremolo", "без тремоло", "убери тремоло" }))
+            f.tremolo = false;
+
+        if (no({ "no ring mod", "без ринг модулятора", "без кольцевой модуляции" }))
+            f.ringMod = false;
+
+        if (no({ "no comb filter", "без гребенчатого фильтра", "убери comb filter" }))
+            f.combFilter = false;
+
+        if (no({ "no tape saturation", "без ленточной сатурации", "убери tape saturation" }))
+            f.tapeSaturation = false;
+
+        if (no({ "no lofi", "no lo-fi", "без лоуфая", "без lo-fi" }))
+            f.lofi = false;
+
+        if (no({ "no haas delay", "без хааса", "убери haas delay" }))
+            f.haasDelay = false;
     }
 
     std::vector<EffectPlan> buildEffectPlan(
@@ -576,6 +701,9 @@ namespace
         Genre genre)
     {
         std::vector<EffectPlan> plan;
+        plan.reserve(16);
+
+        constexpr size_t maximumEffects = 16;
 
         auto add = [&plan](
             const char* id,
@@ -585,6 +713,9 @@ namespace
             float mix,
             int count)
         {
+            if (plan.size() >= maximumEffects)
+                return;
+
             plan.push_back({
                 id,
                 clamp01(p0),
@@ -596,34 +727,28 @@ namespace
         };
 
         const bool hard = t.aggressive || t.metallic;
+
         const bool ambient =
-            genre == Genre::ambient ||
-            genre == Genre::darkAmbient ||
-            genre == Genre::cinematic;
+            genre == Genre::ambient
+            || genre == Genre::darkAmbient
+            || genre == Genre::cinematic;
 
-        const bool lofi =
-            genre == Genre::lofiHipHop ||
-            t.vintage;
+        const bool lofiProfile =
+            genre == Genre::lofiHipHop
+            || t.vintage;
 
-        // Order matters: corrective shaping first,
-        // dynamics and saturation in the middle,
-        // spatial effects at the end.
+        const float dryScale = t.dry ? 0.45f : 1.0f;
+        const float cleanScale = t.clean ? 0.75f : 1.0f;
+
+        // 1. Corrective and tone shaping.
 
         if (f.filter)
         {
-            float cutoff = 0.70f;
-
-            if (t.dark)
-                cutoff = 0.32f;
-
-            if (t.bright)
-                cutoff = 0.82f;
-
-            if (t.warm)
-                cutoff = 0.55f;
-
-            if (t.minimal)
-                cutoff = 0.62f;
+            const float cutoff =
+                t.dark ? 0.32f :
+                t.bright ? 0.82f :
+                t.warm ? 0.55f :
+                t.minimal ? 0.62f : 0.70f;
 
             add(
                 "filter",
@@ -631,6 +756,30 @@ namespace
                 hard ? 0.48f : 0.24f,
                 0.0f,
                 1.0f,
+                2);
+        }
+
+        if (f.noiseGate)
+        {
+            add(
+                "noise_gate",
+                t.clean ? 0.30f : 0.38f,
+                hard ? 0.62f : 0.48f,
+                0.0f,
+                1.0f,
+                2);
+        }
+
+        // 2. Dynamics.
+
+        if (f.transient)
+        {
+            add(
+                "transient",
+                t.punchy || hard ? 0.82f : 0.62f,
+                t.soft ? 0.68f : 0.38f,
+                0.0f,
+                0.82f,
                 2);
         }
 
@@ -645,32 +794,39 @@ namespace
                 3);
         }
 
+        // 3. Saturation and lo-fi processing.
+
         if (f.distortion)
         {
-            float drive = 0.44f;
-
-            if (hard) drive = 0.82f;
-            if (t.warm) drive = 0.36f;
-            if (t.dirty) drive = 0.74f;
-            if (t.clean) drive = 0.20f;
-            if (t.dark) drive = juce::jmax(drive, 0.58f);
+            const float drive =
+                t.clean ? 0.20f :
+                hard ? 0.82f :
+                t.warm ? 0.36f :
+                t.dirty ? 0.74f :
+                t.dark ? 0.58f : 0.44f;
 
             const float tone =
                 t.dark ? 0.38f :
                 t.bright ? 0.82f :
                 t.warm ? 0.48f : 0.65f;
 
-            const float mix =
-                t.clean ? 0.28f :
-                hard ? 0.88f :
-                t.soft ? 0.42f : 0.72f;
-
             add(
                 "distortion",
                 drive,
                 tone,
                 0.0f,
-                mix,
+                (hard ? 0.82f : 0.68f) * cleanScale,
+                2);
+        }
+
+        if (f.tapeSaturation)
+        {
+            add(
+                "tape_saturation",
+                t.warm ? 0.38f : (hard ? 0.70f : 0.48f),
+                t.dark ? 0.38f : 0.62f,
+                0.0f,
+                (lofiProfile ? 0.72f : 0.55f) * cleanScale,
                 2);
         }
 
@@ -678,12 +834,25 @@ namespace
         {
             add(
                 "bitcrusher",
-                lofi ? 0.24f : 0.46f,
-                lofi ? 0.64f : 0.42f,
+                lofiProfile ? 0.24f : 0.46f,
+                lofiProfile ? 0.64f : 0.42f,
                 0.0f,
-                t.clean ? 0.22f : 0.68f,
+                (t.clean ? 0.22f : 0.68f) * cleanScale,
                 2);
         }
+
+        if (f.lofi)
+        {
+            add(
+                "lofi",
+                lofiProfile ? 0.32f : 0.46f,
+                lofiProfile ? 0.38f : 0.55f,
+                0.0f,
+                (t.clean ? 0.28f : 0.62f) * cleanScale,
+                2);
+        }
+
+        // 4. Modulation and movement.
 
         if (f.chorus)
         {
@@ -692,7 +861,7 @@ namespace
                 t.wide ? 0.36f : 0.22f,
                 t.wide ? 0.84f : 0.52f,
                 0.0f,
-                t.soft ? 0.58f : 0.72f,
+                (t.soft ? 0.58f : 0.68f) * dryScale,
                 2);
         }
 
@@ -703,16 +872,85 @@ namespace
                 t.hypnotic ? 0.42f : 0.28f,
                 t.wide ? 0.82f : 0.58f,
                 0.36f,
-                0.68f,
+                0.62f * dryScale,
                 3);
         }
+
+        if (f.autoPan)
+        {
+            add(
+                "autopan",
+                t.hypnotic ? 0.34f : 0.46f,
+                t.wide ? 0.88f : 0.62f,
+                0.0f,
+                0.62f * dryScale,
+                2);
+        }
+
+        if (f.tremolo)
+        {
+            add(
+                "tremolo",
+                t.hypnotic ? 0.58f : 0.38f,
+                t.soft ? 0.38f : 0.62f,
+                0.0f,
+                0.55f * dryScale,
+                2);
+        }
+
+        if (f.ringMod)
+        {
+            add(
+                "ring_mod",
+                t.metallic ? 0.72f : 0.42f,
+                t.dark ? 0.68f : 0.48f,
+                0.0f,
+                hard ? 0.72f : 0.48f,
+                2);
+        }
+
+        // 5. Resonance and stereo space.
+
+        if (f.combFilter)
+        {
+            add(
+                "comb_filter",
+                t.metallic ? 0.72f : 0.38f,
+                t.hypnotic ? 0.62f : 0.42f,
+                0.0f,
+                0.48f * dryScale,
+                2);
+        }
+
+        if (f.stereoWidener)
+        {
+            add(
+                "stereo_widener",
+                t.wide ? 0.88f : 0.68f,
+                t.clean ? 0.58f : 0.48f,
+                0.0f,
+                0.72f * dryScale,
+                2);
+        }
+
+        if (f.haasDelay)
+        {
+            add(
+                "haas_delay",
+                ambient ? 0.52f : 0.34f,
+                t.wide ? 0.86f : 0.62f,
+                0.0f,
+                0.48f * dryScale,
+                2);
+        }
+
+        // 6. Time-based effects at the end of the chain.
 
         if (f.delay)
         {
             const float time =
                 ambient ? 0.66f :
-                t.hypnotic ? 0.52f :
-                0.34f;
+                t.hypnotic ? 0.52f : 0.34f;
 
             const float feedback =
                 ambient ? 0.44f :
@@ -722,13 +960,7 @@ namespace
                 t.dry ? 0.0f :
                 ambient ? 0.78f : 0.58f;
 
-            add(
-                "delay",
-                time,
-                feedback,
-                0.0f,
-                mix,
-                2);
+            add("delay", time, feedback, 0.0f, mix, 2);
         }
 
         if (f.reverb)
@@ -750,13 +982,7 @@ namespace
                 ambient ? 0.82f :
                 t.dark ? 0.62f : 0.42f;
 
-            add(
-                "reverb",
-                size,
-                decay,
-                damp,
-                mix,
-                3);
+            add("reverb", size, decay, damp, mix, 3);
         }
 
         return plan;
@@ -811,16 +1037,16 @@ GenerationOutput GenerationEngine::generate(
 
     EffectFlags flags;
 
-    // 1. Build a musical profile from the genre.
+    // 1. Musical genre profile.
     applyGenreProfile(genre, flags);
 
-    // 2. Add sound characteristics.
+    // 2. Sound characteristics.
     applyTraits(traits, flags);
 
-    // 3. Respect explicitly requested effects.
+    // 3. Explicit effect requests.
     applyExplicitEffects(text, flags);
 
-    // 4. Negative instructions have priority.
+    // 4. Negative commands always have priority.
     applyNegativeCommands(text, flags);
 
     const auto plan = buildEffectPlan(
@@ -828,25 +1054,24 @@ GenerationOutput GenerationEngine::generate(
         traits,
         genre);
 
+    output.detectedGenre = genreName(genre);
+    output.detectedIntent = describeTraits(traits);
+
     if (plan.empty())
     {
-        output.detectedGenre = genreName(genre);
-        output.detectedIntent = describeTraits(traits);
-
         if (genre == Genre::unknown)
         {
             output.summary =
-                "I could not identify a supported genre or effect. "
-                "Try a genre such as Industrial Techno, Dark Ambient, "
-                "Lo-Fi Hip-Hop, House, Trance or Experimental, "
-                "or name an effect such as Distortion or Reverb.";
+                "No supported genre or effect was detected. "
+                "Try Industrial Techno, Dark Ambient, Lo-Fi Hip-Hop, "
+                "House, Trance, Experimental, or name an effect.";
 
             return output;
         }
 
         output.summary =
-            "The requested profile produced no active effects. "
-            "Check whether all effects were explicitly disabled.";
+            "The selected profile contains no active effects. "
+            "Check whether all effects were disabled.";
 
         return output;
     }
@@ -858,11 +1083,11 @@ GenerationOutput GenerationEngine::generate(
         effect.setProperty("on", true, nullptr);
         effect.setProperty("mix", item.mix, nullptr);
 
-        const std::array<float, 3> parameters {
+        const std::array<float, 3> parameters {{
             item.p0,
             item.p1,
             item.p2
-        };
+        }};
 
         for (int i = 0; i < item.parameterCount; ++i)
         {
@@ -878,10 +1103,8 @@ GenerationOutput GenerationEngine::generate(
             juce::String(item.id).toUpperCase());
     }
 
-    output.detectedGenre = genreName(genre);
-    output.detectedIntent = describeTraits(traits);
-
-    output.success = output.rackState.getNumChildren() > 0;
+    output.success =
+        output.rackState.getNumChildren() > 0;
 
     juce::StringArray explanation;
 
@@ -896,7 +1119,7 @@ GenerationOutput GenerationEngine::generate(
         output.effectNames.joinIntoString(" -> "));
 
     output.summary =
-        "NEBULA local generation completed. " +
+        "NEBULA local AI generation completed. " +
         explanation.joinIntoString(" | ");
 
     return output;
