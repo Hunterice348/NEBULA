@@ -17,10 +17,12 @@ public:
         juce::AudioProcessorValueTreeState& apvts,
         Rack& rack);
 
+    // Preset lists
     juce::StringArray getFactoryPresetNames() const;
     juce::StringArray getUserPresetNames() const;
     juce::StringArray getAllPresetNames() const;
 
+    // Preset operations
     bool loadPreset(const juce::String& name);
     bool loadPresetByIndex(int index);
 
@@ -30,6 +32,7 @@ public:
     bool loadNextPreset();
     bool loadPreviousPreset();
 
+    // Current preset
     juce::String getCurrentPresetName() const
     {
         return currentPresetName;
@@ -42,10 +45,13 @@ public:
 
     bool isFactoryPreset(const juce::String& name) const;
 
-    // User data storage.
+    // Storage management
     juce::File getStorageRoot() const;
-    bool moveStorageTo(const juce::File& directory);
 
+    bool moveStorageTo(
+        const juce::File& directory);
+
+    // Callbacks
     std::function<void()> onPresetChanged;
     std::function<void()> onPresetListChanged;
 
@@ -54,6 +60,7 @@ private:
     Rack& rack;
 
     StorageManager storageManager;
+
     juce::File presetDir;
 
     juce::StringArray factoryNames;
