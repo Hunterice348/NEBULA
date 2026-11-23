@@ -1,4 +1,6 @@
+
 #include "Rack.h"
+#include "AdvancedEffects.h"
 
 #include <algorithm>
 #include <cmath>
@@ -19,19 +21,10 @@ namespace
     };
 }
 
-// ============================================================
-// AUDIO CHAIN
-// ============================================================
-
 struct Rack::AudioChain
 {
     std::vector<std::unique_ptr<EffectBase>> effects;
 
-    // Splits an arbitrarily large host buffer into blocks no larger
-    // than the size used when the effects were prepared.
-    //
-    // The temporary AudioBuffer references existing channel memory.
-    // It does not own or allocate audio storage.
     void process(
         juce::AudioBuffer<float>& buffer,
         int maximumBlockSize) noexcept
@@ -39,16 +32,10 @@ struct Rack::AudioChain
         const int numSamples = buffer.getNumSamples();
         const int numChannels = buffer.getNumChannels();
 
-        if (numSamples <= 0 || numChannels <= 0)
-            return;
-
-        // Current effects are prepared for mono/stereo operation.
-        // Do not partially process multichannel buffers.
-        if (numChannels > 2)
+        if (numSamples <= 0 || numChannels <= 0 || numChannels > 2)
             return;
 
         const int chunkLimit = juce::jmax(1, maximumBlockSize);
-
         std::array<float*, 2> channelPointers {};
 
         for (int startSample = 0;
@@ -59,9 +46,7 @@ struct Rack::AudioChain
                 chunkLimit,
                 numSamples - startSample);
 
-            for (int channel = 0;
-                 channel < numChannels;
-                 ++channel)
+            for (int channel = 0; channel < numChannels; ++channel)
             {
                 channelPointers[static_cast<size_t>(channel)] =
                     buffer.getWritePointer(channel, startSample);
@@ -73,17 +58,14 @@ struct Rack::AudioChain
                 currentChunkSize);
 
             for (auto& effect : effects)
-            {
                 if (effect != nullptr)
                     effect->process(block);
-            }
         }
     }
 
     void setEnabled(int index, bool enabled) noexcept
     {
-        if (index < 0 ||
-            index >= static_cast<int>(effects.size()))
+        if (index < 0 || index >= static_cast<int>(effects.size()))
             return;
 
         auto& effect = effects[static_cast<size_t>(index)];
@@ -94,8 +76,7 @@ struct Rack::AudioChain
 
     void setMix(int index, float value) noexcept
     {
-        if (index < 0 ||
-            index >= static_cast<int>(effects.size()))
+        if (index < 0 || index >= static_cast<int>(effects.size()))
             return;
 
         auto& effect = effects[static_cast<size_t>(index)];
@@ -115,10 +96,8 @@ struct Rack::AudioChain
 
         auto& effect = effects[static_cast<size_t>(effectIndex)];
 
-        if (effect == nullptr)
-            return;
-
-        if (parameterIndex < 0 ||
+        if (effect == nullptr ||
+            parameterIndex < 0 ||
             parameterIndex >= effect->getNumParams())
             return;
 
@@ -126,14 +105,8 @@ struct Rack::AudioChain
     }
 };
 
-// ============================================================
-// DESTRUCTION
-// ============================================================
-
 Rack::~Rack()
 {
-    // The host must stop audio processing before destroying Rack.
-
     drainRetired();
 
     Command command;
@@ -162,10 +135,6 @@ Rack::~Rack()
     drainRetired();
 }
 
-// ============================================================
-// NOTIFICATION
-// ============================================================
-
 void Rack::notifyChanged()
 {
     revision.fetch_add(1, std::memory_order_relaxed);
@@ -173,10 +142,6 @@ void Rack::notifyChanged()
     if (onChanged)
         onChanged();
 }
-
-// ============================================================
-// COMMAND QUEUE
-// ============================================================
 
 bool Rack::tryPushCommand(const Command& command) noexcept
 {
@@ -219,10 +184,6 @@ bool Rack::tryPopCommand(Command& command) noexcept
 
     return true;
 }
-
-// ============================================================
-// RETIREMENT QUEUE
-// ============================================================
 
 bool Rack::tryPushRetired(AudioChain* chain) noexcept
 {
@@ -269,10 +230,6 @@ bool Rack::tryPopRetired(AudioChain*& chain) noexcept
     return true;
 }
 
-// ============================================================
-// RETIRED OBJECT COLLECTION
-// ============================================================
-
 void Rack::drainRetired()
 {
     RackLock lock(retiredReadLock);
@@ -281,14 +238,13 @@ void Rack::drainRetired()
 
     while (tryPopRetired(chain))
     {
-        // Destruction occurs on the control thread.
         delete chain;
         chain = nullptr;
     }
 }
 
 // ============================================================
-// CHAIN CREATION
+// EFFECT FACTORY — 18 EFFECTS
 // ============================================================
 
 std::unique_ptr<EffectBase> Rack::create(
@@ -318,6 +274,9 @@ std::unique_ptr<EffectBase> Rack::create(
     if (id == "filter")
         return std::make_unique<FilterEffect>();
 
+    if (AdvancedEffect::supports(id))
+        return std::make_unique<AdvancedEffect>(id);
+
     return nullptr;
 }
 
@@ -342,10 +301,7 @@ std::unique_ptr<Rack::AudioChain> Rack::buildChain(
         if (effect == nullptr)
             continue;
 
-        effect->prepare(
-            targetSampleRate,
-            targetBlockSize);
-
+        effect->prepare(targetSampleRate, targetBlockSize);
         effect->loadState(state);
 
         chain->effects.push_back(std::move(effect));
@@ -353,10 +309,6 @@ std::unique_ptr<Rack::AudioChain> Rack::buildChain(
 
     return chain;
 }
-
-// ============================================================
-// CHAIN PUBLICATION
-// ============================================================
 
 bool Rack::publishChain(std::unique_ptr<AudioChain> chain)
 {
@@ -377,25 +329,15 @@ bool Rack::publishChain(std::unique_ptr<AudioChain> chain)
     if (!queued)
         return false;
 
-    // Ownership transfers to the audio command queue.
     chain.release();
-
     return true;
 }
 
 bool Rack::publishCurrentChainLocked()
 {
-    auto chain = buildChain(
-        effects,
-        sampleRate,
-        blockSize);
-
+    auto chain = buildChain(effects, sampleRate, blockSize);
     return publishChain(std::move(chain));
 }
-
-// ============================================================
-// PREPARE
-// ============================================================
 
 void Rack::prepare(double newSampleRate, int newBlockSize)
 {
@@ -412,10 +354,7 @@ void Rack::prepare(double newSampleRate, int newBlockSize)
         sampleRate = juce::jmax(1.0, newSampleRate);
         blockSize = juce::jmax(1, newBlockSize);
 
-        auto chain = buildChain(
-            effects,
-            sampleRate,
-            blockSize);
+        auto chain = buildChain(effects, sampleRate, blockSize);
 
         if (publishChain(std::move(chain)))
         {
@@ -432,20 +371,11 @@ void Rack::prepare(double newSampleRate, int newBlockSize)
         notifyChanged();
 }
 
-// ============================================================
-// AUDIO PROCESSING
-// ============================================================
-
-void Rack::process(
-    juce::AudioBuffer<float>& buffer) noexcept
+void Rack::process(juce::AudioBuffer<float>& buffer) noexcept
 {
-    // No SpinLock, heap allocation, or object destruction here.
-
     if (buffer.getNumSamples() <= 0 ||
-        buffer.getNumChannels() <= 0)
-        return;
-
-    if (buffer.getNumChannels() > 2)
+        buffer.getNumChannels() <= 0 ||
+        buffer.getNumChannels() > 2)
         return;
 
     if (deferredRetiredChain != nullptr)
@@ -459,7 +389,6 @@ void Rack::process(
         }
 
         deferredRetiredChain = nullptr;
-
         activeChain = deferredNewChain;
         deferredNewChain = nullptr;
     }
@@ -492,9 +421,7 @@ void Rack::process(
                     deferredRetiredChain = activeChain;
                     deferredNewChain = replacement;
 
-                    if (activeChain != nullptr)
-                        activeChain->process(buffer, blockSize);
-
+                    activeChain->process(buffer, blockSize);
                     return;
                 }
 
@@ -502,51 +429,32 @@ void Rack::process(
             }
 
             case CommandType::setEnabled:
-            {
                 if (activeChain != nullptr)
-                {
                     activeChain->setEnabled(
                         command.effectIndex,
                         command.enabled);
-                }
-
                 break;
-            }
 
             case CommandType::setMix:
-            {
                 if (activeChain != nullptr)
-                {
                     activeChain->setMix(
                         command.effectIndex,
                         command.value);
-                }
-
                 break;
-            }
 
             case CommandType::setParameter:
-            {
                 if (activeChain != nullptr)
-                {
                     activeChain->setParameter(
                         command.effectIndex,
                         command.parameterIndex,
                         command.value);
-                }
-
                 break;
-            }
         }
     }
 
     if (activeChain != nullptr)
         activeChain->process(buffer, blockSize);
 }
-
-// ============================================================
-// EFFECT INFORMATION
-// ============================================================
 
 int Rack::size() const
 {
@@ -584,19 +492,12 @@ bool Rack::getEffectInfo(
 
     for (int i = 0; i < count; ++i)
     {
-        result.parameterNames.push_back(
-            effect->getParamName(i));
-
-        result.parameterValues.push_back(
-            effect->getParam(i));
+        result.parameterNames.push_back(effect->getParamName(i));
+        result.parameterValues.push_back(effect->getParam(i));
     }
 
     return true;
 }
-
-// ============================================================
-// PARAMETER COMMANDS
-// ============================================================
 
 bool Rack::setEffectEnabled(int index, bool enabled)
 {
@@ -685,10 +586,8 @@ bool Rack::setEffectParameter(
 
     auto& effect = effects[static_cast<size_t>(index)];
 
-    if (effect == nullptr)
-        return false;
-
-    if (parameter < 0 ||
+    if (effect == nullptr ||
+        parameter < 0 ||
         parameter >= effect->getNumParams())
         return false;
 
@@ -708,10 +607,6 @@ bool Rack::setEffectParameter(
     effect->setParam(parameter, value);
     return true;
 }
-
-// ============================================================
-// ADD EFFECT
-// ============================================================
 
 bool Rack::addEffect(const juce::String& typeID)
 {
@@ -744,10 +639,6 @@ bool Rack::addEffect(const juce::String& typeID)
 
     return added;
 }
-
-// ============================================================
-// REMOVE EFFECT
-// ============================================================
 
 void Rack::removeEffect(int index)
 {
@@ -782,10 +673,6 @@ void Rack::removeEffect(int index)
     if (changed)
         notifyChanged();
 }
-
-// ============================================================
-// MOVE EFFECT
-// ============================================================
 
 void Rack::moveEffect(int from, int to)
 {
@@ -833,10 +720,6 @@ void Rack::moveEffect(int from, int to)
         notifyChanged();
 }
 
-// ============================================================
-// CLEAR RACK
-// ============================================================
-
 void Rack::clearAll()
 {
     drainRetired();
@@ -877,13 +760,19 @@ juce::StringArray Rack::getAvailableTypes() const
         "Phaser",
         "Compressor",
         "Bitcrusher",
-        "Filter"
+        "Filter",
+        "Stereo Widener",
+        "Auto Pan",
+        "Noise Gate",
+        "Transient Shaper",
+        "Tremolo",
+        "Ring Modulator",
+        "Comb Filter",
+        "Tape Saturation",
+        "Lo-Fi",
+        "Haas Delay"
     };
 }
-
-// ============================================================
-// SAVE STATE
-// ============================================================
 
 juce::ValueTree Rack::saveState() const
 {
@@ -894,19 +783,11 @@ juce::ValueTree Rack::saveState() const
     for (const auto& effect : effects)
     {
         if (effect != nullptr)
-        {
-            tree.appendChild(
-                effect->saveState(),
-                nullptr);
-        }
+            tree.appendChild(effect->saveState(), nullptr);
     }
 
     return tree;
 }
-
-// ============================================================
-// LOAD STATE
-// ============================================================
 
 void Rack::loadState(const juce::ValueTree& tree)
 {
@@ -930,7 +811,6 @@ void Rack::loadState(const juce::ValueTree& tree)
             continue;
 
         effect->loadState(child);
-
         newEffects.push_back(std::move(effect));
     }
 
