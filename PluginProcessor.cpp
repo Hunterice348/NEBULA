@@ -177,10 +177,8 @@ void NebulaAudioProcessor::pushSpectrumSample(
 
 void NebulaAudioProcessor::publishSpectrumFrame() noexcept
 {
-    // Clear the complete work buffer.
     fftWorkBuffer.fill(0.0f);
 
-    // Copy collected input samples.
     for (int i = 0; i < FFT_SIZE; ++i)
     {
         fftWorkBuffer[
@@ -190,13 +188,11 @@ void NebulaAudioProcessor::publishSpectrumFrame() noexcept
         ];
     }
 
-    // Apply Hann window.
     window.multiplyWithWindowingTable(
         fftWorkBuffer.data(),
         FFT_SIZE
     );
 
-    // Frequency-only FFT.
     fft.performFrequencyOnlyForwardTransform(
         fftWorkBuffer.data()
     );
@@ -256,12 +252,13 @@ void NebulaAudioProcessor::processBlock(
             buffer.clear(ch, 0, samples);
     }
 
-    // Determine whether prepared dry storage can hold this block.
-    const bool dryCapacityAvailable =
-        samples <= dryBuffer.getNumSamples()
-        && channels <= dryBuffer.getNumChannels();
+    // This processor supports mono and stereo layouts.
+    if (channels > 2)
+    {
+        buffer.clear();
+        return;
+    }
 
-    // Read master parameters.
     auto* inputParameter =
         apvts.getRawParameterValue("INPUT");
 
@@ -328,89 +325,143 @@ void NebulaAudioProcessor::processBlock(
 
 
     // --------------------------------------------------------
-    // SAVE DRY SIGNAL
-    // --------------------------------------------------------
-
-    if (dryCapacityAvailable)
-    {
-        for (int ch = 0; ch < channels; ++ch)
-        {
-            dryBuffer.copyFrom(
-                ch,
-                0,
-                buffer,
-                ch,
-                0,
-                samples
-            );
-        }
-    }
-
-
-    // --------------------------------------------------------
     // SPECTRUM ANALYSIS
     // --------------------------------------------------------
 
     // Analyze the first channel after input gain.
-    // Samples are accumulated across host blocks of any size.
-    if (channels > 0)
+    // Samples are accumulated across arbitrary host blocks.
+    const float* analysisData = buffer.getReadPointer(0);
+
+    for (int i = 0; i < samples; ++i)
+        pushSpectrumSample(analysisData[i]);
+
+
+    // --------------------------------------------------------
+    // CHUNKED RACK + GLOBAL DRY/WET
+    // --------------------------------------------------------
+
+    const int dryCapacity = dryBuffer.getNumSamples();
+
+    const bool dryStorageAvailable =
+        dryCapacity > 0
+        && channels <= dryBuffer.getNumChannels();
+
+    if (dryStorageAvailable)
     {
-        const float* analysisData =
-            buffer.getReadPointer(0);
+        // The host may send blocks larger than the size
+        // requested in prepareToPlay().
+        //
+        // Process the host block in prepared-size chunks.
+        // This avoids audio-thread allocation and preserves
+        // the global Dry/Wet mix for oversized host blocks.
 
-        for (int i = 0; i < samples; ++i)
-        {
-            pushSpectrumSample(analysisData[i]);
-        }
-    }
-
-
-    // --------------------------------------------------------
-    // EFFECT RACK
-    // --------------------------------------------------------
-
-    rack.process(buffer);
-
-
-    // --------------------------------------------------------
-    // GLOBAL MIX + OUTPUT GAIN
-    // --------------------------------------------------------
-
-    for (int sample = 0; sample < samples; ++sample)
-    {
-        const float wetAmount =
-            mixSmoothed.getNextValue();
-
-        const float outputGain =
-            outputGainSmoothed.getNextValue();
+        std::array<float*, 2> channelPointers {};
 
         for (int ch = 0; ch < channels; ++ch)
+            channelPointers[static_cast<size_t>(ch)] =
+                buffer.getWritePointer(ch);
+
+        int startSample = 0;
+
+        while (startSample < samples)
         {
-            float* wet = buffer.getWritePointer(ch);
+            const int chunkSamples = juce::jmin(
+                dryCapacity,
+                samples - startSample
+            );
 
-            float outputSample = wet[sample];
+            // Non-owning view into the host audio buffer.
+            juce::AudioBuffer<float> blockView(
+                channelPointers.data(),
+                channels,
+                startSample,
+                chunkSamples
+            );
 
-            if (!std::isfinite(outputSample))
-                outputSample = 0.0f;
-
-            if (dryCapacityAvailable)
+            // Save the dry signal before processing.
+            for (int ch = 0; ch < channels; ++ch)
             {
-                const float* dry =
-                    dryBuffer.getReadPointer(ch);
-
-                const float drySample = dry[sample];
-
-                outputSample =
-                    drySample * (1.0f - wetAmount)
-                    + outputSample * wetAmount;
+                dryBuffer.copyFrom(
+                    ch,
+                    0,
+                    blockView,
+                    ch,
+                    0,
+                    chunkSamples
+                );
             }
 
-            outputSample *= outputGain;
+            // Process this chunk through the effect rack.
+            rack.process(blockView);
 
-            if (!std::isfinite(outputSample))
-                outputSample = 0.0f;
+            // Apply global mix and output gain.
+            for (int sample = 0; sample < chunkSamples; ++sample)
+            {
+                const float wetAmount =
+                    mixSmoothed.getNextValue();
 
-            wet[sample] = outputSample;
+                const float outputGain =
+                    outputGainSmoothed.getNextValue();
+
+                for (int ch = 0; ch < channels; ++ch)
+                {
+                    float* wet =
+                        blockView.getWritePointer(ch);
+
+                    const float* dry =
+                        dryBuffer.getReadPointer(ch);
+
+                    float wetSample = wet[sample];
+
+                    if (!std::isfinite(wetSample))
+                        wetSample = 0.0f;
+
+                    const float drySample = dry[sample];
+
+                    float outputSample =
+                        drySample * (1.0f - wetAmount)
+                        + wetSample * wetAmount;
+
+                    outputSample *= outputGain;
+
+                    if (!std::isfinite(outputSample))
+                        outputSample = 0.0f;
+
+                    wet[sample] = outputSample;
+                }
+            }
+
+            startSample += chunkSamples;
+        }
+    }
+    else
+    {
+        // Defensive fallback for an invalid or unprepared
+        // processing state. Do not access unavailable storage.
+        //
+        // Normal DAW operation should use the chunked path.
+
+        for (int sample = 0; sample < samples; ++sample)
+        {
+            const float outputGain =
+                outputGainSmoothed.getNextValue();
+
+            for (int ch = 0; ch < channels; ++ch)
+            {
+                float* data = buffer.getWritePointer(ch);
+
+                float value = data[sample];
+
+                if (!std::isfinite(value))
+                    value = 0.0f;
+
+                value *= outputGain;
+
+                if (!std::isfinite(value))
+                    value = 0.0f;
+
+                data[sample] = value;
+            }
         }
     }
 }
