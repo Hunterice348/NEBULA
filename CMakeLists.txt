@@ -7,6 +7,10 @@ include(CTest)
 
 add_subdirectory(JUCE)
 
+# ============================================================
+# NEBULA MULTI FX
+# ============================================================
+
 juce_add_plugin(NebulaMultiFX
     COMPANY_NAME "LoFiLabs"
     IS_SYNTH FALSE
@@ -56,6 +60,9 @@ target_sources(NebulaMultiFX PRIVATE
 
     GenerationEngine.cpp
     GenerationEngine.h
+
+    FXCommandEngine.cpp
+    FXCommandEngine.h
 )
 
 target_compile_features(NebulaMultiFX PRIVATE cxx_std_17)
@@ -71,6 +78,10 @@ target_link_libraries(NebulaMultiFX
         juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags
 )
+
+# ============================================================
+# NEBULA INSTRUMENT
+# ============================================================
 
 juce_add_plugin(NebulaInstrument
     COMPANY_NAME "LoFiLabs"
@@ -106,6 +117,10 @@ target_link_libraries(NebulaInstrument
         juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags
 )
+
+# ============================================================
+# TESTS
+# ============================================================
 
 if (BUILD_TESTING)
     find_package(Threads REQUIRED)
