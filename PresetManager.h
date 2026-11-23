@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "Rack.h"
+#include "StorageManager.h"
 
 class PresetManager
 {
@@ -41,6 +42,10 @@ public:
 
     bool isFactoryPreset(const juce::String& name) const;
 
+    // User data storage.
+    juce::File getStorageRoot() const;
+    bool moveStorageTo(const juce::File& directory);
+
     std::function<void()> onPresetChanged;
     std::function<void()> onPresetListChanged;
 
@@ -48,6 +53,7 @@ private:
     juce::AudioProcessorValueTreeState& apvts;
     Rack& rack;
 
+    StorageManager storageManager;
     juce::File presetDir;
 
     juce::StringArray factoryNames;
