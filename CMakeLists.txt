@@ -1,8 +1,28 @@
+
 cmake_minimum_required(VERSION 3.22)
 
-project(NEBULA VERSION 0.3.0 LANGUAGES C CXX)
+project(NEBULA VERSION 0.4.0 LANGUAGES C CXX)
 
 include(CTest)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+# Keep builds reproducible across Windows and macOS.
+if(APPLE)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS deployment target")
+endif()
+
+if(MSVC)
+    add_compile_options(/permissive- /Zc:__cplusplus)
+endif()
+
+# JUCE is expected as a repository submodule.
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/JUCE/CMakeLists.txt")
+    message(FATAL_ERROR
+        "JUCE submodule is missing. Run: git submodule update --init --recursive")
+endif()
 
 add_subdirectory(JUCE)
 
@@ -30,6 +50,9 @@ target_sources(NebulaMultiFX PRIVATE
 
     Effects.cpp
     Effects.h
+
+    AdvancedEffects.cpp
+    AdvancedEffects.h
 
     Rack.cpp
     Rack.h
@@ -68,6 +91,13 @@ target_sources(NebulaMultiFX PRIVATE
 )
 
 target_compile_features(NebulaMultiFX PRIVATE cxx_std_17)
+
+target_compile_definitions(NebulaMultiFX
+    PUBLIC
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_VST3_CAN_REPLACE_VST2=0
+)
 
 juce_generate_juce_header(NebulaMultiFX)
 
@@ -108,6 +138,13 @@ target_sources(NebulaInstrument PRIVATE
 
 target_compile_features(NebulaInstrument PRIVATE cxx_std_17)
 
+target_compile_definitions(NebulaInstrument
+    PUBLIC
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_VST3_CAN_REPLACE_VST2=0
+)
+
 juce_generate_juce_header(NebulaInstrument)
 
 target_link_libraries(NebulaInstrument
@@ -124,7 +161,7 @@ target_link_libraries(NebulaInstrument
 # TESTS
 # ============================================================
 
-if (BUILD_TESTING)
+if(BUILD_TESTING)
     find_package(Threads REQUIRED)
 
     add_executable(
