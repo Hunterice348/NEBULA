@@ -1,4 +1,3 @@
-
 #pragma once
 
 #include <JuceHeader.h>
@@ -31,6 +30,9 @@ public:
     Rack& operator=(const Rack&) = delete;
 
     void prepare(double sampleRate, int blockSize);
+
+    // Processes mono or stereo buffers. Oversized buffers are split
+    // into prepared-size chunks without allocating on the audio thread.
     void process(juce::AudioBuffer<float>& buffer) noexcept;
 
     int size() const;
@@ -89,8 +91,8 @@ private:
 
     mutable juce::SpinLock rackLock;
 
-    // These objects are control-side prototypes.
-    // They are never processed by the audio thread.
+    // Control-side prototypes. The audio thread never processes
+    // these objects directly.
     std::vector<std::unique_ptr<EffectBase>> effects;
 
     double sampleRate = 44100.0;
