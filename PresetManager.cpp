@@ -1,15 +1,11 @@
+
 PresetManager::PresetManager(
     juce::AudioProcessorValueTreeState& a,
     Rack& r)
     : apvts(a),
       rack(r)
 {
-    presetDir =
-        juce::File::getSpecialLocation(
-            juce::File::userApplicationDataDirectory)
-            .getChildFile("LoFiLabs")
-            .getChildFile("NEBULA")
-            .getChildFile("Presets");
+    presetDir = storageManager.getPresetsDirectory();
 
     if (!presetDir.exists())
         presetDir.createDirectory();
