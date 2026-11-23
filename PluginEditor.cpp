@@ -1,5 +1,6 @@
 
 #include "PluginEditor.h"
+#include "GenerationEngine.h"
 
 // ============================================================
 // EFFECT CARD
@@ -90,7 +91,8 @@ EffectCard::EffectCard(
             value,
             juce::dontSendNotification);
 
-        knob->setTooltip(info.parameterNames[static_cast<size_t>(i)]);
+        knob->setTooltip(
+            info.parameterNames[static_cast<size_t>(i)]);
 
         knob->onValueChange = [this, i, raw = knob.get()]()
         {
@@ -212,11 +214,11 @@ NebulaAudioProcessorEditor::NebulaAudioProcessorEditor(
     addAndMakeVisible(rackViewport);
 
     // --------------------------------------------------------
-    // AI / QUICK EFFECT GENERATOR
+    // GENERATION ENGINE
     // --------------------------------------------------------
 
     aiInput.setTextToShowWhenEmpty(
-        "Describe a sound: dark space, warm distortion, echo...",
+        "Describe a sound: dark industrial techno, ambient space...",
         juce::Colours::grey);
 
     aiInput.setColour(
@@ -243,36 +245,25 @@ NebulaAudioProcessorEditor::NebulaAudioProcessorEditor(
 
     generateBtn.onClick = [this]()
     {
-        const auto text = aiInput.getText().toLowerCase();
+        const auto result =
+            nebula::GenerationEngine::generate(
+                aiInput.getText());
 
-        bool changed = false;
+        if (!result.success)
+        {
+            aiInput.setTooltip(result.summary);
+            return;
+        }
 
-        if (text.contains("reverb") || text.contains("space"))
-            changed |= proc.rack.addEffect("reverb");
+        proc.rack.loadState(result.rackState);
 
-        if (text.contains("delay") || text.contains("echo"))
-            changed |= proc.rack.addEffect("delay");
+        rebuildRackUI();
 
-        if (text.contains("distortion") || text.contains("warm"))
-            changed |= proc.rack.addEffect("distortion");
+        aiInput.setTooltip(result.summary);
 
-        if (text.contains("chorus"))
-            changed |= proc.rack.addEffect("chorus");
-
-        if (text.contains("phaser"))
-            changed |= proc.rack.addEffect("phaser");
-
-        if (text.contains("compressor"))
-            changed |= proc.rack.addEffect("compressor");
-
-        if (text.contains("bitcrusher") || text.contains("lofi"))
-            changed |= proc.rack.addEffect("bitcrusher");
-
-        if (text.contains("filter"))
-            changed |= proc.rack.addEffect("filter");
-
-        if (changed)
-            rebuildRackUI();
+        generateBtn.setButtonText(
+            "GENERATED: " +
+            juce::String(result.effectNames.size()));
     };
 
     addAndMakeVisible(generateBtn);
@@ -343,11 +334,8 @@ NebulaAudioProcessorEditor::NebulaAudioProcessorEditor(
         aOut,
         "OUTPUT");
 
-    // Initial rack display.
     rebuildRackUI();
 
-    // Detect rack changes made outside this editor,
-    // for example when a preset is loaded.
     startTimerHz(5);
 }
 
@@ -397,13 +385,11 @@ void NebulaAudioProcessorEditor::resized()
 {
     auto area = getLocalBounds().reduced(10);
 
-    // Header / preset bar.
     presetBar.setBounds(
         area.removeFromTop(30));
 
     area.removeFromTop(8);
 
-    // Reels and spectrum.
     auto visualRow = area.removeFromTop(140);
 
     leftReel.setBounds(
@@ -417,7 +403,6 @@ void NebulaAudioProcessorEditor::resized()
 
     area.removeFromTop(8);
 
-    // Effect rack.
     auto rackArea = area.removeFromTop(
         juce::jmax(150, area.getHeight() - 175));
 
@@ -445,7 +430,6 @@ void NebulaAudioProcessorEditor::resized()
 
     area.removeFromTop(7);
 
-    // Generator row.
     auto aiRow = area.removeFromTop(32);
 
     generateBtn.setBounds(
@@ -457,7 +441,6 @@ void NebulaAudioProcessorEditor::resized()
 
     area.removeFromTop(5);
 
-    // Master controls.
     auto masterRow = area.removeFromTop(
         juce::jmin(76, area.getHeight()));
 
