@@ -1,153 +1,559 @@
+
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
 NebulaAudioProcessor::NebulaAudioProcessor()
-    : AudioProcessor(BusesProperties()
-                     .withInput("Input", juce::AudioChannelSet::stereo(), true)
-                     .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
-      apvts(*this, nullptr, "Parameters", createParameterLayout()),
-      presetManager(apvts, rack)
+    : AudioProcessor(
+        BusesProperties()
+            .withInput(
+                "Input",
+                juce::AudioChannelSet::stereo(),
+                true
+            )
+            .withOutput(
+                "Output",
+                juce::AudioChannelSet::stereo(),
+                true
+            )
+    ),
+    apvts(
+        *this,
+        nullptr,
+        "Parameters",
+        createParameterLayout()
+    ),
+    presetManager(apvts, rack)
 {
-    rack.onChanged = [this]() { /* UI notification hook; no synchronization is provided by this callback. */ };
+    rack.onChanged = [this]()
+    {
+        // Reserved for future UI notification.
+    };
 }
 
-NebulaAudioProcessor::~NebulaAudioProcessor() {}
+NebulaAudioProcessor::~NebulaAudioProcessor() = default;
 
-bool NebulaAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
+
+// ============================================================
+// BUS LAYOUT
+// ============================================================
+
+bool NebulaAudioProcessor::isBusesLayoutSupported(
+    const BusesLayout& layouts) const
 {
-    if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::mono()
-     && layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
+    const auto output = layouts.getMainOutputChannelSet();
+    const auto input = layouts.getMainInputChannelSet();
+
+    if (output != juce::AudioChannelSet::mono()
+        && output != juce::AudioChannelSet::stereo())
+    {
         return false;
-    return layouts.getMainOutputChannelSet() == layouts.getMainInputChannelSet();
+    }
+
+    return output == input;
 }
 
-juce::AudioProcessorValueTreeState::ParameterLayout NebulaAudioProcessor::createParameterLayout()
+
+// ============================================================
+// PARAMETERS
+// ============================================================
+
+juce::AudioProcessorValueTreeState::ParameterLayout
+NebulaAudioProcessor::createParameterLayout()
 {
-    std::vector<std::unique_ptr<juce::RangedAudioParameter>> p;
-    p.push_back(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID { "INPUT", 1 }, "Input", -24.0f, 24.0f, 0.0f));
-    p.push_back(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID { "MIX", 1 }, "Mix", 0.0f, 100.0f, 100.0f));
-    p.push_back(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID { "OUTPUT", 1 }, "Output", -24.0f, 24.0f, 0.0f));
-    return { p.begin(), p.end() };
+    std::vector<
+        std::unique_ptr<juce::RangedAudioParameter>
+    > parameters;
+
+    parameters.push_back(
+        std::make_unique<juce::AudioParameterFloat>(
+            juce::ParameterID { "INPUT", 1 },
+            "Input",
+            -24.0f,
+            24.0f,
+            0.0f
+        )
+    );
+
+    parameters.push_back(
+        std::make_unique<juce::AudioParameterFloat>(
+            juce::ParameterID { "MIX", 1 },
+            "Mix",
+            0.0f,
+            100.0f,
+            100.0f
+        )
+    );
+
+    parameters.push_back(
+        std::make_unique<juce::AudioParameterFloat>(
+            juce::ParameterID { "OUTPUT", 1 },
+            "Output",
+            -24.0f,
+            24.0f,
+            0.0f
+        )
+    );
+
+    return { parameters.begin(), parameters.end() };
 }
 
-void NebulaAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
+
+// ============================================================
+// PREPARE
+// ============================================================
+
+void NebulaAudioProcessor::prepareToPlay(
+    double sampleRate,
+    int samplesPerBlock)
 {
-    rack.prepare(sampleRate, samplesPerBlock);
-    // Host reconfiguration is expected to occur with processing stopped. Reserve
-    // two channels to support the declared mono/stereo layouts without callback growth.
-    dryBuffer.setSize(2, juce::jmax(1, samplesPerBlock), false, true, true);
-    fftBuffer.fill(0.0f);
+    const int safeBlockSize = juce::jmax(
+        1,
+        samplesPerBlock
+    );
+
+    rack.prepare(
+        sampleRate,
+        safeBlockSize
+    );
+
+    // Reserve storage before audio processing starts.
+    dryBuffer.setSize(
+        2,
+        safeBlockSize,
+        false,
+        true,
+        true
+    );
+
+    dryBuffer.clear();
+
+    fftInputBuffer.fill(0.0f);
+    fftWorkBuffer.fill(0.0f);
+
+    fftWritePosition = 0;
+    spectrumSequence = 0;
+
     inputGainSmoothed.reset(sampleRate, 0.02);
     outputGainSmoothed.reset(sampleRate, 0.02);
     mixSmoothed.reset(sampleRate, 0.02);
+
+    inputGainSmoothed.setCurrentAndTargetValue(1.0f);
+    outputGainSmoothed.setCurrentAndTargetValue(1.0f);
+    mixSmoothed.setCurrentAndTargetValue(1.0f);
 }
 
-void NebulaAudioProcessor::releaseResources() {}
+void NebulaAudioProcessor::releaseResources()
+{
+}
 
-void NebulaAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
+
+// ============================================================
+// SPECTRUM COLLECTION
+// ============================================================
+
+void NebulaAudioProcessor::pushSpectrumSample(
+    float sample) noexcept
+{
+    if (!std::isfinite(sample))
+        sample = 0.0f;
+
+    fftInputBuffer[
+        static_cast<size_t>(fftWritePosition)
+    ] = sample;
+
+    ++fftWritePosition;
+
+    if (fftWritePosition >= FFT_SIZE)
+    {
+        publishSpectrumFrame();
+        fftWritePosition = 0;
+    }
+}
+
+
+// ============================================================
+// FFT PUBLICATION
+// ============================================================
+
+void NebulaAudioProcessor::publishSpectrumFrame() noexcept
+{
+    // Clear the complete work buffer.
+    fftWorkBuffer.fill(0.0f);
+
+    // Copy collected input samples.
+    for (int i = 0; i < FFT_SIZE; ++i)
+    {
+        fftWorkBuffer[
+            static_cast<size_t>(i)
+        ] = fftInputBuffer[
+            static_cast<size_t>(i)
+        ];
+    }
+
+    // Apply Hann window.
+    window.multiplyWithWindowingTable(
+        fftWorkBuffer.data(),
+        FFT_SIZE
+    );
+
+    // Frequency-only FFT.
+    fft.performFrequencyOnlyForwardTransform(
+        fftWorkBuffer.data()
+    );
+
+    nebula::SpectrumFrame frame;
+
+    frame.sequence = ++spectrumSequence;
+
+    for (size_t i = 0; i < frame.bins.size(); ++i)
+    {
+        const float magnitude = juce::jmax(
+            0.0f,
+            fftWorkBuffer[i] / static_cast<float>(FFT_SIZE)
+        );
+
+        const float db = juce::Decibels::gainToDecibels(
+            magnitude,
+            -100.0f
+        );
+
+        frame.bins[i] = juce::jlimit(
+            0.0f,
+            1.0f,
+            (db + 80.0f) / 80.0f
+        );
+    }
+
+    // Never wait for the UI thread.
+    // If the queue is full, this frame is discarded.
+    (void)spectrumFrames.tryPush(frame);
+}
+
+
+// ============================================================
+// AUDIO PROCESSING
+// ============================================================
+
+void NebulaAudioProcessor::processBlock(
+    juce::AudioBuffer<float>& buffer,
+    juce::MidiBuffer&)
 {
     juce::ScopedNoDenormals noDenormals;
+
     const int inputChannels = getTotalNumInputChannels();
     const int outputChannels = getTotalNumOutputChannels();
+
     const int samples = buffer.getNumSamples();
+    const int channels = buffer.getNumChannels();
 
+    if (samples <= 0 || channels <= 0)
+        return;
+
+    // Clear unused output channels.
     for (int ch = inputChannels; ch < outputChannels; ++ch)
-        buffer.clear(ch, 0, samples);
-
-    // Do not resize a buffer in the callback. This is an interim bounded fallback;
-    // the host normally prepares with its maximum block size. Oversized blocks
-    // bypass the global dry/wet blend rather than reading past prepared storage.
-    const bool dryCapacityAvailable = samples <= dryBuffer.getNumSamples()
-                                   && buffer.getNumChannels() <= dryBuffer.getNumChannels();
-    if (dryCapacityAvailable)
-        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
-            dryBuffer.copyFrom(ch, 0, buffer, ch, 0, samples);
-
-    if (buffer.getNumChannels() > 0 && samples >= FFT_SIZE)
     {
-        const auto* data = buffer.getReadPointer(0);
-        for (int i = 0; i < FFT_SIZE; ++i)
-            fftBuffer[(size_t) i] = std::isfinite(data[i]) ? data[i] : 0.0f;
-        window.multiplyWithWindowingTable(fftBuffer.data(), FFT_SIZE);
-        fft.performFrequencyOnlyForwardTransform(fftBuffer.data());
-
-        nebula::SpectrumFrame frame;
-        frame.sequence = ++spectrumSequence;
-        for (size_t i = 0; i < frame.bins.size(); ++i)
-        {
-            const float magnitude = juce::jmax(0.0f, fftBuffer[i] / (float) FFT_SIZE);
-            const float db = juce::Decibels::gainToDecibels(magnitude, -100.0f);
-            frame.bins[i] = juce::jlimit(0.0f, 1.0f, (db + 80.0f) / 80.0f);
-        }
-        // Bounded telemetry is lossy by design: if UI is behind, preserve queued
-        // complete frames and drop this one instead of waiting or overwriting.
-        (void) spectrumFrames.tryPush(frame);
+        if (ch < channels)
+            buffer.clear(ch, 0, samples);
     }
 
-    auto* inParam = apvts.getRawParameterValue("INPUT");
-    auto* outParam = apvts.getRawParameterValue("OUTPUT");
-    auto* mixParam = apvts.getRawParameterValue("MIX");
-    const float inputDb = inParam != nullptr ? inParam->load() : 0.0f;
-    const float outputDb = outParam != nullptr ? outParam->load() : 0.0f;
-    const float mix = mixParam != nullptr ? mixParam->load() / 100.0f : 1.0f;
+    // Determine whether prepared dry storage can hold this block.
+    const bool dryCapacityAvailable =
+        samples <= dryBuffer.getNumSamples()
+        && channels <= dryBuffer.getNumChannels();
 
-    inputGainSmoothed.setTargetValue(juce::Decibels::decibelsToGain(inputDb));
-    outputGainSmoothed.setTargetValue(juce::Decibels::decibelsToGain(outputDb));
-    mixSmoothed.setTargetValue(juce::jlimit(0.0f, 1.0f, mix));
-    buffer.applyGain(inputGainSmoothed.getNextValue());
+    // Read master parameters.
+    auto* inputParameter =
+        apvts.getRawParameterValue("INPUT");
 
-    // NOTE: rack remains mutable and is not safe for concurrent structural edits.
+    auto* mixParameter =
+        apvts.getRawParameterValue("MIX");
+
+    auto* outputParameter =
+        apvts.getRawParameterValue("OUTPUT");
+
+    const float inputDb =
+        inputParameter != nullptr
+            ? inputParameter->load(std::memory_order_relaxed)
+            : 0.0f;
+
+    const float mixPercent =
+        mixParameter != nullptr
+            ? mixParameter->load(std::memory_order_relaxed)
+            : 100.0f;
+
+    const float outputDb =
+        outputParameter != nullptr
+            ? outputParameter->load(std::memory_order_relaxed)
+            : 0.0f;
+
+    const float inputTarget = juce::Decibels::decibelsToGain(
+        inputDb
+    );
+
+    const float outputTarget = juce::Decibels::decibelsToGain(
+        outputDb
+    );
+
+    const float mixTarget = juce::jlimit(
+        0.0f,
+        1.0f,
+        mixPercent * 0.01f
+    );
+
+    inputGainSmoothed.setTargetValue(inputTarget);
+    outputGainSmoothed.setTargetValue(outputTarget);
+    mixSmoothed.setTargetValue(mixTarget);
+
+
+    // --------------------------------------------------------
+    // INPUT GAIN
+    // --------------------------------------------------------
+
+    for (int sample = 0; sample < samples; ++sample)
+    {
+        const float gain = inputGainSmoothed.getNextValue();
+
+        for (int ch = 0; ch < channels; ++ch)
+        {
+            float* data = buffer.getWritePointer(ch);
+
+            float value = data[sample];
+
+            if (!std::isfinite(value))
+                value = 0.0f;
+
+            data[sample] = value * gain;
+        }
+    }
+
+
+    // --------------------------------------------------------
+    // SAVE DRY SIGNAL
+    // --------------------------------------------------------
+
+    if (dryCapacityAvailable)
+    {
+        for (int ch = 0; ch < channels; ++ch)
+        {
+            dryBuffer.copyFrom(
+                ch,
+                0,
+                buffer,
+                ch,
+                0,
+                samples
+            );
+        }
+    }
+
+
+    // --------------------------------------------------------
+    // SPECTRUM ANALYSIS
+    // --------------------------------------------------------
+
+    // Analyze the first channel after input gain.
+    // Samples are accumulated across host blocks of any size.
+    if (channels > 0)
+    {
+        const float* analysisData =
+            buffer.getReadPointer(0);
+
+        for (int i = 0; i < samples; ++i)
+        {
+            pushSpectrumSample(analysisData[i]);
+        }
+    }
+
+
+    // --------------------------------------------------------
+    // EFFECT RACK
+    // --------------------------------------------------------
+
     rack.process(buffer);
 
-    if (dryCapacityAvailable)
+
+    // --------------------------------------------------------
+    // GLOBAL MIX + OUTPUT GAIN
+    // --------------------------------------------------------
+
+    for (int sample = 0; sample < samples; ++sample)
     {
-        const float outputGain = outputGainSmoothed.getNextValue();
-        const float wetMix = mixSmoothed.getNextValue();
-        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+        const float wetAmount =
+            mixSmoothed.getNextValue();
+
+        const float outputGain =
+            outputGainSmoothed.getNextValue();
+
+        for (int ch = 0; ch < channels; ++ch)
         {
-            const auto* dry = dryBuffer.getReadPointer(ch);
-            auto* wet = buffer.getWritePointer(ch);
-            for (int i = 0; i < samples; ++i)
-                wet[i] = (dry[i] * (1.0f - wetMix) + wet[i] * wetMix) * outputGain;
+            float* wet = buffer.getWritePointer(ch);
+
+            float outputSample = wet[sample];
+
+            if (!std::isfinite(outputSample))
+                outputSample = 0.0f;
+
+            if (dryCapacityAvailable)
+            {
+                const float* dry =
+                    dryBuffer.getReadPointer(ch);
+
+                const float drySample = dry[sample];
+
+                outputSample =
+                    drySample * (1.0f - wetAmount)
+                    + outputSample * wetAmount;
+            }
+
+            outputSample *= outputGain;
+
+            if (!std::isfinite(outputSample))
+                outputSample = 0.0f;
+
+            wet[sample] = outputSample;
         }
     }
 }
 
-int NebulaAudioProcessor::getNumPrograms() { return juce::jmax(1, presetManager.getAllPresetNames().size()); }
-int NebulaAudioProcessor::getCurrentProgram() { return juce::jmax(0, presetManager.getAllPresetNames().indexOf(presetManager.getCurrentPresetName())); }
-void NebulaAudioProcessor::setCurrentProgram(int i) { presetManager.loadPresetByIndex(i); }
-const juce::String NebulaAudioProcessor::getProgramName(int i)
-{
-    auto names = presetManager.getAllPresetNames();
-    return (i >= 0 && i < names.size()) ? names[i] : juce::String();
-}
-juce::AudioProcessorEditor* NebulaAudioProcessor::createEditor() { return new NebulaAudioProcessorEditor(*this); }
-bool NebulaAudioProcessor::hasEditor() const { return true; }
-const juce::String NebulaAudioProcessor::getName() const { return "NEBULA"; }
 
-void NebulaAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
+// ============================================================
+// PROGRAMS
+// ============================================================
+
+int NebulaAudioProcessor::getNumPrograms()
+{
+    return juce::jmax(
+        1,
+        presetManager.getAllPresetNames().size()
+    );
+}
+
+int NebulaAudioProcessor::getCurrentProgram()
+{
+    const auto names = presetManager.getAllPresetNames();
+
+    return juce::jmax(
+        0,
+        names.indexOf(
+            presetManager.getCurrentPresetName()
+        )
+    );
+}
+
+void NebulaAudioProcessor::setCurrentProgram(int index)
+{
+    presetManager.loadPresetByIndex(index);
+}
+
+const juce::String NebulaAudioProcessor::getProgramName(int index)
+{
+    const auto names = presetManager.getAllPresetNames();
+
+    if (index >= 0 && index < names.size())
+        return names[index];
+
+    return {};
+}
+
+
+// ============================================================
+// EDITOR
+// ============================================================
+
+juce::AudioProcessorEditor*
+NebulaAudioProcessor::createEditor()
+{
+    return new NebulaAudioProcessorEditor(*this);
+}
+
+bool NebulaAudioProcessor::hasEditor() const
+{
+    return true;
+}
+
+const juce::String NebulaAudioProcessor::getName() const
+{
+    return "NEBULA";
+}
+
+
+// ============================================================
+// STATE SAVE
+// ============================================================
+
+void NebulaAudioProcessor::getStateInformation(
+    juce::MemoryBlock& destData)
 {
     auto state = apvts.copyState();
-    state.appendChild(rack.saveState(), nullptr);
-    state.setProperty("presetName", presetManager.getCurrentPresetName(), nullptr);
-    if (auto xml = state.createXml()) copyXmlToBinary(*xml, destData);
-}
 
-void NebulaAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
-{
-    std::unique_ptr<juce::XmlElement> xml(getXmlFromBinary(data, sizeInBytes));
-    if (xml && xml->hasTagName(apvts.state.getType()))
+    state.appendChild(
+        rack.saveState(),
+        nullptr
+    );
+
+    state.setProperty(
+        "presetName",
+        presetManager.getCurrentPresetName(),
+        nullptr
+    );
+
+    if (auto xml = state.createXml())
     {
-        auto tree = juce::ValueTree::fromXml(*xml);
-        if (tree.isValid())
-        {
-            apvts.replaceState(tree);
-            if (tree.hasProperty("presetName"))
-                presetManager.setCurrentPresetName(tree.getProperty("presetName").toString());
-            if (auto rackTree = tree.getChildWithName("RACK"); rackTree.isValid())
-                rack.loadState(rackTree);
-        }
+        copyXmlToBinary(
+            *xml,
+            destData
+        );
     }
 }
 
-juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new NebulaAudioProcessor(); }
+
+// ============================================================
+// STATE RESTORE
+// ============================================================
+
+void NebulaAudioProcessor::setStateInformation(
+    const void* data,
+    int sizeInBytes)
+{
+    if (data == nullptr || sizeInBytes <= 0)
+        return;
+
+    std::unique_ptr<juce::XmlElement> xml(
+        getXmlFromBinary(data, sizeInBytes)
+    );
+
+    if (xml == nullptr)
+        return;
+
+    if (!xml->hasTagName(apvts.state.getType()))
+        return;
+
+    auto tree = juce::ValueTree::fromXml(*xml);
+
+    if (!tree.isValid())
+        return;
+
+    apvts.replaceState(tree);
+
+    if (tree.hasProperty("presetName"))
+    {
+        presetManager.setCurrentPresetName(
+            tree.getProperty("presetName").toString()
+        );
+    }
+
+    auto rackTree = tree.getChildWithName("RACK");
+
+    if (rackTree.isValid())
+        rack.loadState(rackTree);
+}
+
+
+// ============================================================
+// PLUGIN ENTRY
+// ============================================================
+
+juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
+{
+    return new NebulaAudioProcessor();
+}
