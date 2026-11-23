@@ -1,4 +1,4 @@
-
+#include "FXCommandEngine.h"
 #include "PluginEditor.h"
 #include "GenerationEngine.h"
 
