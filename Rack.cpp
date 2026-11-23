@@ -1,4 +1,5 @@
-
+#include "EffectsV3.h"
+#include "GranularDelay.h"
 #include "Rack.h"
 #include "AdvancedEffects.h"
 
