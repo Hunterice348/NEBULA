@@ -11,7 +11,6 @@ StorageManager::StorageManager()
         juce::File::getSpecialLocation(
             juce::File::userApplicationDataDirectory);
 
-    // Configuration remains independent from plugin location.
     configDirectory =
         appData.getChildFile("LoFiLabs")
                .getChildFile("NEBULA_Config");
@@ -23,7 +22,7 @@ StorageManager::StorageManager()
 }
 
 // ============================================================
-// DEFAULT DATA LOCATION
+// DEFAULT LOCATION
 // ============================================================
 
 juce::File StorageManager::getDefaultDataRoot() const
@@ -32,7 +31,6 @@ juce::File StorageManager::getDefaultDataRoot() const
         juce::File::getSpecialLocation(
             juce::File::userApplicationDataDirectory);
 
-    // Preserve the existing NEBULA user data location.
     return appData.getChildFile("LoFiLabs")
                   .getChildFile("NEBULA");
 }
@@ -66,7 +64,6 @@ bool StorageManager::initialise()
     if (dataRoot.createDirectory().failed())
         return false;
 
-    // Create the standard NEBULA library structure.
     if (getPresetsDirectory().createDirectory().failed())
         return false;
 
@@ -84,6 +81,10 @@ bool StorageManager::initialise()
 
     if (getSettingsDirectory().createDirectory().failed())
         return false;
+
+    // Persist the default path on first launch.
+    if (!configFile.existsAsFile())
+        return saveLocation(dataRoot);
 
     return true;
 }
@@ -128,7 +129,7 @@ juce::File StorageManager::getSettingsDirectory() const
 }
 
 // ============================================================
-// SAVE STORAGE LOCATION
+// SAVE LOCATION
 // ============================================================
 
 bool StorageManager::saveLocation(
@@ -140,7 +141,6 @@ bool StorageManager::saveLocation(
     if (configDirectory.createDirectory().failed())
         return false;
 
-    // JUCE writes the file using its replacement mechanism.
     if (!configFile.replaceWithText(
             directory.getFullPathName()))
     {
@@ -165,11 +165,38 @@ bool StorageManager::setDataRoot(
     if (!directory.isDirectory())
         return false;
 
+    if (directory == dataRoot)
+        return true;
+
+    if (directory.isAChildOf(dataRoot)
+        || dataRoot.isAChildOf(directory))
+    {
+        return false;
+    }
+
+    if (directory.getChildFile("Presets").createDirectory().failed())
+        return false;
+
+    if (directory.getChildFile("Samples").createDirectory().failed())
+        return false;
+
+    if (directory.getChildFile("DrumKits").createDirectory().failed())
+        return false;
+
+    if (directory.getChildFile("Patterns").createDirectory().failed())
+        return false;
+
+    if (directory.getChildFile("Banks").createDirectory().failed())
+        return false;
+
+    if (directory.getChildFile("Settings").createDirectory().failed())
+        return false;
+
     return saveLocation(directory);
 }
 
 // ============================================================
-// RECURSIVE DIRECTORY COPY
+// RECURSIVE COPY
 // ============================================================
 
 bool StorageManager::copyDirectoryContents(
@@ -226,15 +253,15 @@ bool StorageManager::moveDataTo(
     if (source == target)
         return true;
 
-    // Prevent copying a directory into itself
-    // or into one of its descendants.
+    // Do not copy into the source directory
+    // or into one of its child directories.
     if (source.isAChildOf(target)
         || target.isAChildOf(source))
     {
         return false;
     }
 
-    // Do not overwrite an existing directory.
+    // Never overwrite an existing destination.
     if (target.exists())
         return false;
 
@@ -243,24 +270,20 @@ bool StorageManager::moveDataTo(
     if (!parent.isDirectory())
         return false;
 
-    // Copy everything before changing the active location.
+    // Copy the library.
     if (!copyDirectoryContents(source, target))
     {
-        // Remove incomplete copy only.
         target.deleteRecursively();
         return false;
     }
 
-    // Switch to the new location only after successful copy.
+    // Change the active path only after successful copy.
     if (!saveLocation(target))
     {
-        // Original data remains untouched.
-        // Remove the incomplete destination copy.
         target.deleteRecursively();
         return false;
     }
 
-    // IMPORTANT:
-    // The original directory is deliberately preserved.
+    // Source data intentionally remains untouched.
     return true;
 }
