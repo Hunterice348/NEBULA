@@ -1,9 +1,11 @@
+
 #include "EffectsV3.h"
 #include "GranularDelay.h"
 #include "Rack.h"
 #include "AdvancedEffects.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <utility>
 
@@ -59,8 +61,10 @@ struct Rack::AudioChain
                 currentChunkSize);
 
             for (auto& effect : effects)
+            {
                 if (effect != nullptr)
                     effect->process(block);
+            }
         }
     }
 
@@ -245,41 +249,76 @@ void Rack::drainRetired()
 }
 
 // ============================================================
-// EFFECT FACTORY — 18 EFFECTS
+// EFFECT FACTORY
+// 20 EFFECTS
 // ============================================================
 
 std::unique_ptr<EffectBase> Rack::create(
     const juce::String& id) const
 {
-    if (id == "reverb")
+    const auto type = id.trim().toLowerCase();
+
+    // --------------------------------------------------------
+    // CORE EFFECTS
+    // --------------------------------------------------------
+
+    if (type == "reverb")
         return std::make_unique<ReverbEffect>();
 
-    if (id == "delay")
+    if (type == "delay")
         return std::make_unique<DelayEffect>();
 
-    if (id == "distortion")
+    if (type == "distortion")
         return std::make_unique<DistortionEffect>();
 
-    if (id == "chorus")
+    if (type == "chorus")
         return std::make_unique<ChorusEffect>();
 
-    if (id == "phaser")
+    if (type == "phaser")
         return std::make_unique<PhaserEffect>();
 
-    if (id == "compressor")
+    if (type == "compressor")
         return std::make_unique<CompressorEffect>();
 
-    if (id == "bitcrusher")
+    if (type == "bitcrusher")
         return std::make_unique<BitcrusherEffect>();
 
-    if (id == "filter")
+    if (type == "filter")
         return std::make_unique<FilterEffect>();
 
-    if (AdvancedEffect::supports(id))
-        return std::make_unique<AdvancedEffect>(id);
+    // --------------------------------------------------------
+    // ADVANCED DSP EFFECTS
+    // --------------------------------------------------------
+
+    if (AdvancedEffect::supports(type))
+        return std::make_unique<AdvancedEffect>(type);
+
+    // --------------------------------------------------------
+    // MULTIBAND COMPRESSOR
+    // --------------------------------------------------------
+
+    if (type == "multiband_compressor"
+        || type == "multiband compressor")
+    {
+        return std::make_unique<MultibandCompressorEffect>();
+    }
+
+    // --------------------------------------------------------
+    // GRANULAR DELAY
+    // --------------------------------------------------------
+
+    if (type == "granular_delay"
+        || type == "granular delay")
+    {
+        return std::make_unique<GranularDelayEffect>();
+    }
 
     return nullptr;
 }
+
+// ============================================================
+// BUILD AUDIO CHAIN
+// ============================================================
 
 std::unique_ptr<Rack::AudioChain> Rack::buildChain(
     const std::vector<std::unique_ptr<EffectBase>>& source,
@@ -311,6 +350,10 @@ std::unique_ptr<Rack::AudioChain> Rack::buildChain(
     return chain;
 }
 
+// ============================================================
+// PUBLISH CHAIN
+// ============================================================
+
 bool Rack::publishChain(std::unique_ptr<AudioChain> chain)
 {
     if (chain == nullptr)
@@ -339,6 +382,10 @@ bool Rack::publishCurrentChainLocked()
     auto chain = buildChain(effects, sampleRate, blockSize);
     return publishChain(std::move(chain));
 }
+
+// ============================================================
+// PREPARE
+// ============================================================
 
 void Rack::prepare(double newSampleRate, int newBlockSize)
 {
@@ -371,6 +418,10 @@ void Rack::prepare(double newSampleRate, int newBlockSize)
     if (changed)
         notifyChanged();
 }
+
+// ============================================================
+// AUDIO PROCESSING
+// ============================================================
 
 void Rack::process(juce::AudioBuffer<float>& buffer) noexcept
 {
@@ -457,11 +508,19 @@ void Rack::process(juce::AudioBuffer<float>& buffer) noexcept
         activeChain->process(buffer, blockSize);
 }
 
+// ============================================================
+// EFFECT COUNT
+// ============================================================
+
 int Rack::size() const
 {
     RackLock lock(rackLock);
     return static_cast<int>(effects.size());
 }
+
+// ============================================================
+// EFFECT INFORMATION
+// ============================================================
 
 bool Rack::getEffectInfo(
     int index,
@@ -500,6 +559,10 @@ bool Rack::getEffectInfo(
     return true;
 }
 
+// ============================================================
+// ENABLE EFFECT
+// ============================================================
+
 bool Rack::setEffectEnabled(int index, bool enabled)
 {
     drainRetired();
@@ -530,6 +593,10 @@ bool Rack::setEffectEnabled(int index, bool enabled)
     effect->setEnabled(enabled);
     return true;
 }
+
+// ============================================================
+// EFFECT MIX
+// ============================================================
 
 bool Rack::setEffectMix(int index, float mix)
 {
@@ -566,6 +633,10 @@ bool Rack::setEffectMix(int index, float mix)
     effect->setMix(mix);
     return true;
 }
+
+// ============================================================
+// EFFECT PARAMETER
+// ============================================================
 
 bool Rack::setEffectParameter(
     int index,
@@ -609,6 +680,10 @@ bool Rack::setEffectParameter(
     return true;
 }
 
+// ============================================================
+// ADD EFFECT
+// ============================================================
+
 bool Rack::addEffect(const juce::String& typeID)
 {
     drainRetired();
@@ -640,6 +715,10 @@ bool Rack::addEffect(const juce::String& typeID)
 
     return added;
 }
+
+// ============================================================
+// REMOVE EFFECT
+// ============================================================
 
 void Rack::removeEffect(int index)
 {
@@ -674,6 +753,10 @@ void Rack::removeEffect(int index)
     if (changed)
         notifyChanged();
 }
+
+// ============================================================
+// MOVE EFFECT
+// ============================================================
 
 void Rack::moveEffect(int from, int to)
 {
@@ -721,6 +804,10 @@ void Rack::moveEffect(int from, int to)
         notifyChanged();
 }
 
+// ============================================================
+// CLEAR ALL
+// ============================================================
+
 void Rack::clearAll()
 {
     drainRetired();
@@ -762,6 +849,7 @@ juce::StringArray Rack::getAvailableTypes() const
         "Compressor",
         "Bitcrusher",
         "Filter",
+
         "Stereo Widener",
         "Auto Pan",
         "Noise Gate",
@@ -771,9 +859,16 @@ juce::StringArray Rack::getAvailableTypes() const
         "Comb Filter",
         "Tape Saturation",
         "Lo-Fi",
-        "Haas Delay"
+        "Haas Delay",
+
+        "Multiband Compressor",
+        "Granular Delay"
     };
 }
+
+// ============================================================
+// SAVE STATE
+// ============================================================
 
 juce::ValueTree Rack::saveState() const
 {
@@ -789,6 +884,10 @@ juce::ValueTree Rack::saveState() const
 
     return tree;
 }
+
+// ============================================================
+// LOAD STATE
+// ============================================================
 
 void Rack::loadState(const juce::ValueTree& tree)
 {
