@@ -1,102 +1,292 @@
 #include "Rack.h"
 
-void Rack::prepare(double sampleRate, int blockSize)
+namespace
 {
-    sr = sampleRate; bs = blockSize;
-    for (auto& e : effects) e->prepare(sr, bs);
+    class RackLock
+    {
+    public:
+        explicit RackLock(const juce::SpinLock& lock)
+            : scopedLock(lock)
+        {
+        }
+
+    private:
+        juce::SpinLock::ScopedLockType scopedLock;
+    };
+}
+
+void Rack::notifyChanged()
+{
+    revision.fetch_add(1, std::memory_order_relaxed);
+
+    if (onChanged)
+        onChanged();
+}
+
+void Rack::prepare(double newSampleRate, int newBlockSize)
+{
+    RackLock lock(rackLock);
+
+    sampleRate = juce::jmax(1.0, newSampleRate);
+    blockSize = juce::jmax(1, newBlockSize);
+
+    for (auto& effect : effects)
+        effect->prepare(sampleRate, blockSize);
 }
 
 void Rack::process(juce::AudioBuffer<float>& buffer)
 {
-    for (auto& e : effects) e->process(buffer);
+    // Audio thread never waits for the UI thread.
+    // If the rack is being modified, this block passes through unchanged.
+    juce::SpinLock::ScopedTryLockType lock(rackLock);
+
+    if (!lock.isLocked())
+        return;
+
+    for (auto& effect : effects)
+    {
+        if (effect != nullptr)
+            effect->process(buffer);
+    }
 }
 
-std::unique_ptr<EffectBase> Rack::create(const juce::String& id) const
+int Rack::size() const
 {
-    if (id == "reverb")      return std::make_unique<ReverbEffect>();
-    if (id == "delay")       return std::make_unique<DelayEffect>();
-    if (id == "distortion")  return std::make_unique<DistortionEffect>();
-    if (id == "chorus")      return std::make_unique<ChorusEffect>();
-    if (id == "phaser")      return std::make_unique<PhaserEffect>();
-    if (id == "compressor")  return std::make_unique<CompressorEffect>();
-    if (id == "bitcrusher")  return std::make_unique<BitcrusherEffect>();
-    if (id == "filter")      return std::make_unique<FilterEffect>();
+    RackLock lock(rackLock);
+    return static_cast<int>(effects.size());
+}
+
+bool Rack::getEffectInfo(int index, EffectInfo& result) const
+{
+    RackLock lock(rackLock);
+
+    if (index < 0 || index >= static_cast<int>(effects.size()))
+        return false;
+
+    const auto& effect = effects[static_cast<size_t>(index)];
+
+    if (effect == nullptr)
+        return false;
+
+    result.typeID = effect->getTypeID();
+    result.displayName = effect->getDisplayName();
+    result.enabled = effect->isEnabled();
+    result.mix = effect->getMix();
+
+    result.parameterNames.clear();
+    result.parameterValues.clear();
+
+    const int count = effect->getNumParams();
+
+    result.parameterNames.reserve(static_cast<size_t>(count));
+    result.parameterValues.reserve(static_cast<size_t>(count));
+
+    for (int i = 0; i < count; ++i)
+    {
+        result.parameterNames.push_back(effect->getParamName(i));
+        result.parameterValues.push_back(effect->getParam(i));
+    }
+
+    return true;
+}
+
+bool Rack::setEffectEnabled(int index, bool enabled)
+{
+    RackLock lock(rackLock);
+
+    if (index < 0 || index >= static_cast<int>(effects.size()))
+        return false;
+
+    effects[static_cast<size_t>(index)]->setEnabled(enabled);
+    return true;
+}
+
+bool Rack::setEffectMix(int index, float mix)
+{
+    RackLock lock(rackLock);
+
+    if (index < 0 || index >= static_cast<int>(effects.size()))
+        return false;
+
+    effects[static_cast<size_t>(index)]->setMix(mix);
+    return true;
+}
+
+bool Rack::setEffectParameter(int index, int parameter, float value)
+{
+    RackLock lock(rackLock);
+
+    if (index < 0 || index >= static_cast<int>(effects.size()))
+        return false;
+
+    auto& effect = effects[static_cast<size_t>(index)];
+
+    if (parameter < 0 || parameter >= effect->getNumParams())
+        return false;
+
+    effect->setParam(parameter, value);
+    return true;
+}
+
+std::unique_ptr<EffectBase> Rack::create(
+    const juce::String& id) const
+{
+    if (id == "reverb")
+        return std::make_unique<ReverbEffect>();
+
+    if (id == "delay")
+        return std::make_unique<DelayEffect>();
+
+    if (id == "distortion")
+        return std::make_unique<DistortionEffect>();
+
+    if (id == "chorus")
+        return std::make_unique<ChorusEffect>();
+
+    if (id == "phaser")
+        return std::make_unique<PhaserEffect>();
+
+    if (id == "compressor")
+        return std::make_unique<CompressorEffect>();
+
+    if (id == "bitcrusher")
+        return std::make_unique<BitcrusherEffect>();
+
+    if (id == "filter")
+        return std::make_unique<FilterEffect>();
+
     return nullptr;
 }
 
 bool Rack::addEffect(const juce::String& typeID)
 {
-    if (auto fx = create(typeID))
     {
-        fx->prepare(sr, bs);
-        effects.push_back(std::move(fx));
-        if (onChanged) onChanged();
-        return true;
+        RackLock lock(rackLock);
+
+        auto effect = create(typeID);
+
+        if (effect == nullptr)
+            return false;
+
+        effect->prepare(sampleRate, blockSize);
+        effects.push_back(std::move(effect));
     }
-    return false;
+
+    notifyChanged();
+    return true;
 }
 
-void Rack::removeEffect(int i)
+void Rack::removeEffect(int index)
 {
-    if (i >= 0 && i < (int)effects.size())
+    bool changed = false;
+
     {
-        effects.erase(effects.begin() + i);
-        if (onChanged) onChanged();
+        RackLock lock(rackLock);
+
+        if (index >= 0 && index < static_cast<int>(effects.size()))
+        {
+            effects.erase(effects.begin() + index);
+            changed = true;
+        }
     }
+
+    if (changed)
+        notifyChanged();
 }
 
 void Rack::moveEffect(int from, int to)
 {
-    if (from < 0 || from >= (int)effects.size()) return;
-    if (to < 0 || to >= (int)effects.size()) return;
-    if (from == to) return;
-    auto fx = std::move(effects[from]);
-    effects.erase(effects.begin() + from);
-    effects.insert(effects.begin() + to, std::move(fx));
-    if (onChanged) onChanged();
+    bool changed = false;
+
+    {
+        RackLock lock(rackLock);
+
+        const int count = static_cast<int>(effects.size());
+
+        if (from < 0 || from >= count ||
+            to < 0 || to >= count ||
+            from == to)
+            return;
+
+        auto effect = std::move(effects[static_cast<size_t>(from)]);
+
+        effects.erase(effects.begin() + from);
+        effects.insert(effects.begin() + to, std::move(effect));
+
+        changed = true;
+    }
+
+    if (changed)
+        notifyChanged();
 }
 
 void Rack::clearAll()
 {
-    effects.clear();
-    if (onChanged) onChanged();
-}
+    {
+        RackLock lock(rackLock);
+        effects.clear();
+    }
 
-EffectBase* Rack::get(int i)
-{
-    return (i >= 0 && i < (int)effects.size()) ? effects[i].get() : nullptr;
-}
-const EffectBase* Rack::get(int i) const
-{
-    return (i >= 0 && i < (int)effects.size()) ? effects[i].get() : nullptr;
+    notifyChanged();
 }
 
 juce::StringArray Rack::getAvailableTypes() const
 {
-    return { "Reverb", "Delay", "Distortion", "Chorus",
-             "Phaser", "Compressor", "Bitcrusher", "Filter" };
+    return {
+        "Reverb",
+        "Delay",
+        "Distortion",
+        "Chorus",
+        "Phaser",
+        "Compressor",
+        "Bitcrusher",
+        "Filter"
+    };
 }
 
 juce::ValueTree Rack::saveState() const
 {
-    juce::ValueTree t("RACK");
-    for (auto& e : effects) t.appendChild(e->saveState(), nullptr);
-    return t;
+    RackLock lock(rackLock);
+
+    juce::ValueTree tree("RACK");
+
+    for (const auto& effect : effects)
+    {
+        if (effect != nullptr)
+            tree.appendChild(effect->saveState(), nullptr);
+    }
+
+    return tree;
 }
 
 void Rack::loadState(const juce::ValueTree& tree)
 {
-    effects.clear();
-    if (!tree.hasType("RACK")) return;
-    for (int i = 0; i < tree.getNumChildren(); ++i)
+    if (!tree.isValid() || !tree.hasType("RACK"))
+        return;
+
     {
-        auto child = tree.getChild(i);
-        if (auto fx = create(child.getType().toString()))
+        RackLock lock(rackLock);
+
+        std::vector<std::unique_ptr<EffectBase>> newEffects;
+        newEffects.reserve(static_cast<size_t>(tree.getNumChildren()));
+
+        for (int i = 0; i < tree.getNumChildren(); ++i)
         {
-            fx->prepare(sr, bs);
-            fx->loadState(child);
-            effects.push_back(std::move(fx));
+            const auto child = tree.getChild(i);
+
+            auto effect = create(child.getType().toString());
+
+            if (effect == nullptr)
+                continue;
+
+            effect->prepare(sampleRate, blockSize);
+            effect->loadState(child);
+
+            newEffects.push_back(std::move(effect));
         }
+
+        effects.swap(newEffects);
     }
-    if (onChanged) onChanged();
+
+    notifyChanged();
 }
