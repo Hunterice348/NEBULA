@@ -1,0 +1,181 @@
+
+#include "StorageManager.h"
+
+StorageManager::StorageManager()
+{
+    const auto appData =
+        juce::File::getSpecialLocation(
+            juce::File::userApplicationDataDirectory);
+
+    // Keep the location setting independent from the library.
+    configDirectory =
+        appData.getChildFile("LoFiLabs")
+               .getChildFile("NEBULA_Config");
+
+    configFile =
+        configDirectory.getChildFile("storage_path.txt");
+
+    initialise();
+}
+
+juce::File StorageManager::getDefaultDataRoot() const
+{
+    const auto appData =
+        juce::File::getSpecialLocation(
+            juce::File::userApplicationDataDirectory);
+
+    // Preserve the existing NEBULA preset location.
+    return appData.getChildFile("LoFiLabs")
+                  .getChildFile("NEBULA");
+}
+
+void StorageManager::initialise()
+{
+    configDirectory.createDirectory();
+
+    if (configFile.existsAsFile())
+    {
+        const auto savedPath =
+            configFile.loadFileAsString().trim();
+
+        if (savedPath.isNotEmpty())
+        {
+            const juce::File savedDirectory(savedPath);
+
+            if (savedDirectory.isDirectory())
+                dataRoot = savedDirectory;
+        }
+    }
+
+    if (!dataRoot.isDirectory())
+        dataRoot = getDefaultDataRoot();
+
+    dataRoot.createDirectory();
+
+    // Create the standard library structure.
+    getPresetsDirectory().createDirectory();
+    getSamplesDirectory().createDirectory();
+    getDrumKitsDirectory().createDirectory();
+    getPatternsDirectory().createDirectory();
+    getBanksDirectory().createDirectory();
+    getSettingsDirectory().createDirectory();
+}
+
+juce::File StorageManager::getDataRoot() const
+{
+    return dataRoot;
+}
+
+juce::File StorageManager::getPresetsDirectory() const
+{
+    return dataRoot.getChildFile("Presets");
+}
+
+juce::File StorageManager::getSamplesDirectory() const
+{
+    return dataRoot.getChildFile("Samples");
+}
+
+juce::File StorageManager::getDrumKitsDirectory() const
+{
+    return dataRoot.getChildFile("DrumKits");
+}
+
+juce::File StorageManager::getPatternsDirectory() const
+{
+    return dataRoot.getChildFile("Patterns");
+}
+
+juce::File StorageManager::getBanksDirectory() const
+{
+    return dataRoot.getChildFile("Banks");
+}
+
+juce::File StorageManager::getSettingsDirectory() const
+{
+    return dataRoot.getChildFile("Settings");
+}
+
+bool StorageManager::saveLocation(
+    const juce::File& directory)
+{
+    if (!directory.isDirectory())
+        return false;
+
+    configDirectory.createDirectory();
+
+    const auto temporaryFile =
+        configDirectory.getChildFile("storage_path.tmp");
+
+    if (!temporaryFile.replaceWithText(
+            directory.getFullPathName()))
+    {
+        return false;
+    }
+
+    if (!temporaryFile.replaceFileIn(
+            configFile))
+    {
+        return false;
+    }
+
+    dataRoot = directory;
+    return true;
+}
+
+bool StorageManager::setDataRoot(
+    const juce::File& directory)
+{
+    if (directory == juce::File())
+        return false;
+
+    if (!directory.createDirectory())
+        return false;
+
+    return saveLocation(directory);
+}
+
+bool StorageManager::moveDataTo(
+    const juce::File& directory)
+{
+    if (directory == juce::File())
+        return false;
+
+    const auto source = dataRoot;
+    const auto target = directory;
+
+    if (source == target)
+        return true;
+
+    // Prevent copying a directory into itself or its descendants.
+    if (source.isAChildOf(target)
+        || target.isAChildOf(source))
+    {
+        return false;
+    }
+
+    if (!source.isDirectory())
+        return false;
+
+    if (!target.createDirectory())
+        return false;
+
+    // Never merge into or overwrite an existing user library.
+    const auto existingItems =
+        target.findChildFiles(
+            juce::File::findFilesAndDirectories,
+            false);
+
+    if (!existingItems.isEmpty())
+        return false;
+
+    // Copy first. Do not delete the original library.
+    if (!source.copyDirectoryTo(target))
+        return false;
+
+    // Switch only after the copy succeeds.
+    if (!saveLocation(target))
+        return false;
+
+    return true;
+}
