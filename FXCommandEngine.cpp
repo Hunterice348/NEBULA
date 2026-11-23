@@ -1,4 +1,3 @@
-
 #include "FXCommandEngine.h"
 
 #include <array>
@@ -20,15 +19,28 @@ namespace
         float mix;
     };
 
-    constexpr std::array<EffectDefinition, 8> definitions {{
-        { "reverb", "reverb|реверб|реверберация", 3, 0.50f, 0.50f, 0.50f, 0.75f },
-        { "delay", "delay|дилей|эхо", 2, 0.30f, 0.40f, 0.00f, 0.65f },
+    // Keep this table synchronized with Effects.h,
+    // AdvancedEffects.h and AIPlan.cpp.
+    constexpr std::array<EffectDefinition, 18> definitions {{
+        { "reverb", "reverb|reverberation|реверб|реверберация", 3, 0.50f, 0.50f, 0.50f, 0.75f },
+        { "delay", "delay|echo|дилей|эхо", 2, 0.30f, 0.40f, 0.00f, 0.65f },
         { "distortion", "distortion|дисторшн|искажение|сатурация|overdrive|fuzz", 2, 0.50f, 0.70f, 0.00f, 0.85f },
         { "chorus", "chorus|хорус", 2, 0.30f, 0.50f, 0.00f, 0.75f },
         { "phaser", "phaser|фейзер|фазер", 3, 0.30f, 0.50f, 0.40f, 0.70f },
-        { "compressor", "compressor|компрессор|компрессия", 3, 0.50f, 0.50f, 0.50f, 1.00f },
-        { "bitcrusher", "bitcrusher|биткрашер|биткраш", 2, 0.50f, 0.50f, 0.00f, 0.70f },
-        { "filter", "filter|фильтр", 2, 0.50f, 0.30f, 0.00f, 1.00f }
+        { "compressor", "compressor|compression|компрессор|компрессия", 3, 0.50f, 0.50f, 0.50f, 1.00f },
+        { "bitcrusher", "bitcrusher|bit crusher|биткрашер|биткраш", 2, 0.50f, 0.50f, 0.00f, 0.70f },
+        { "filter", "filter|lowpass|highpass|фильтр", 2, 0.50f, 0.30f, 0.00f, 1.00f },
+
+        { "stereo_widener", "stereo widener|stereo_widener|stereo width|расширитель стерео|ширина стерео", 2, 0.75f, 0.50f, 0.00f, 0.70f },
+        { "autopan", "auto pan|autopan|автопан|автопанорама|авто панорама", 2, 0.40f, 0.75f, 0.00f, 0.65f },
+        { "noise_gate", "noise gate|noise_gate|gate|гейт|шумовой гейт", 2, 0.35f, 0.50f, 0.00f, 1.00f },
+        { "transient", "transient shaper|transient|транзиент шейпер|транзиент|атака и сустейн", 2, 0.70f, 0.40f, 0.00f, 0.75f },
+        { "tremolo", "tremolo|тремоло", 2, 0.45f, 0.65f, 0.00f, 0.70f },
+        { "ring_mod", "ring modulator|ring modulation|ring_mod|ring mod|кольцевая модуляция|ринг модулятор", 2, 0.45f, 0.50f, 0.00f, 0.60f },
+        { "comb_filter", "comb filter|comb_filter|гребенчатый фильтр|комб фильтр", 2, 0.35f, 0.55f, 0.00f, 0.55f },
+        { "tape_saturation", "tape saturation|tape_saturation|tape saturator|ленточная сатурация|ленточный перегруз", 2, 0.45f, 0.60f, 0.00f, 0.65f },
+        { "lofi", "lo-fi|lofi|lo fi|лоу фай|лоуфай|лоу-фай", 2, 0.40f, 0.45f, 0.00f, 0.65f },
+        { "haas_delay", "haas delay|haas_delay|haas effect|эффект хааса|хаас задержка", 2, 0.30f, 0.70f, 0.00f, 0.60f }
     }};
 
     juce::String normalise(const juce::String& value)
@@ -41,25 +53,43 @@ namespace
         std::initializer_list<const char*> words)
     {
         for (const auto* word : words)
+        {
             if (text.contains(juce::String(word)))
                 return true;
+        }
 
         return false;
     }
 
-    const EffectDefinition* findDefinition(const juce::String& text)
+    const EffectDefinition* findDefinition(
+        const juce::String& text)
     {
+        const EffectDefinition* best = nullptr;
+        int bestLength = 0;
+
         for (const auto& definition : definitions)
         {
             juce::StringArray aliases;
             aliases.addTokens(definition.aliases, "|", "");
 
-            for (const auto& alias : aliases)
-                if (text.contains(alias))
-                    return &definition;
+            for (const auto& rawAlias : aliases)
+            {
+                const auto alias = rawAlias.trim();
+
+                if (alias.isEmpty() || !text.contains(alias))
+                    continue;
+
+                // Prefer the longest matching alias.
+                // This prevents "Haas Delay" from becoming "Delay".
+                if (alias.length() > bestLength)
+                {
+                    best = &definition;
+                    bestLength = alias.length();
+                }
+            }
         }
 
-        return nullptr;
+        return best;
     }
 
     bool isExactEffectName(const juce::String& text)
@@ -70,8 +100,10 @@ namespace
             aliases.addTokens(definition.aliases, "|", "");
 
             for (const auto& alias : aliases)
+            {
                 if (text == alias.trim())
                     return true;
+            }
         }
 
         return false;
@@ -194,8 +226,10 @@ namespace
         const juce::String& typeID)
     {
         for (int i = 0; i < rack.getNumChildren(); ++i)
+        {
             if (rack.getChild(i).hasType(typeID))
                 return i;
+        }
 
         return -1;
     }
@@ -229,7 +263,9 @@ namespace
         juce::ValueTree& rack,
         const EffectDefinition& definition)
     {
-        if (rack.getNumChildren() >= 16)
+        constexpr int maximumRackEffects = 16;
+
+        if (rack.getNumChildren() >= maximumRackEffects)
             return false;
 
         rack.appendChild(makeDefaultEffect(definition), nullptr);
@@ -283,23 +319,26 @@ namespace
         if (!effect.isValid())
             return false;
 
-        int parameter = 0;
+        // Adjust the second parameter for effects where it represents
+        // feedback, decay, depth, release, tone or width.
         const juce::String id(definition.id);
 
-        if (id == "reverb"
-            || id == "delay"
-            || id == "chorus"
-            || id == "phaser"
-            || id == "compressor"
-            || id == "filter")
-        {
-            parameter = 1;
-        }
+        const int parameter =
+            (id == "reverb"
+             || id == "delay"
+             || id == "chorus"
+             || id == "phaser"
+             || id == "compressor"
+             || id == "filter")
+                ? 1
+                : 0;
 
         const juce::Identifier property(
             "p" + juce::String(parameter));
 
-        const float oldValue = readFloat(effect, property, 0.5f);
+        const float oldValue =
+            readFloat(effect, property, 0.5f);
+
         const float newValue = juce::jlimit(
             0.0f, 1.0f, oldValue + direction * 0.12f);
 
@@ -331,7 +370,8 @@ namespace
                 && id != "reverb"
                 && id != "delay"
                 && id != "chorus"
-                && id != "phaser")
+                && id != "phaser"
+                && id != "haas_delay")
                 continue;
 
             const float oldMix = readFloat(effect, "mix", 1.0f);
@@ -415,7 +455,7 @@ FXCommandResult FXCommandEngine::execute(
 
     const auto* definition = findDefinition(text);
 
-    // Genre descriptions belong to GenerationEngine, not this FX parser.
+    // Genre descriptions are handled by GenerationEngine.
     if (isGenreDescription(text)
         && !isAddCommand(text)
         && !isRemoveCommand(text)
@@ -426,7 +466,8 @@ FXCommandResult FXCommandEngine::execute(
         && !isMoveFirstCommand(text)
         && !isMoveLastCommand(text))
     {
-        result.summary = "Genre request: passed to GenerationEngine.";
+        result.summary =
+            "Genre request: passed to GenerationEngine.";
         return result;
     }
 
@@ -436,7 +477,8 @@ FXCommandResult FXCommandEngine::execute(
         {
             result.recognized = true;
 
-            const float amount = isDryCommand(text) ? -0.20f : 0.15f;
+            const float amount =
+                isDryCommand(text) ? -0.20f : 0.15f;
 
             result.changed = adjustAllMixes(
                 result.rackState,
@@ -481,7 +523,10 @@ FXCommandResult FXCommandEngine::execute(
 
     if (isRemoveCommand(text) || isNegativeEffectCommand(text))
     {
-        result.changed = removeEffect(result.rackState, *definition);
+        result.changed = removeEffect(
+            result.rackState,
+            *definition);
+
         result.success = result.changed;
         result.summary = result.changed
             ? "Removed " + effectName + "."
@@ -533,11 +578,16 @@ FXCommandResult FXCommandEngine::execute(
         }
 
         auto effect = result.rackState.getChild(index);
-        const float oldMix = readFloat(effect, "mix", 1.0f);
-        const float amount = isDryCommand(text) ? -0.25f : 0.20f;
-        const float newMix = juce::jlimit(0.0f, 1.0f, oldMix + amount);
 
-        result.changed = std::abs(newMix - oldMix) > 0.0001f;
+        const float oldMix = readFloat(effect, "mix", 1.0f);
+        const float amount =
+            isDryCommand(text) ? -0.25f : 0.20f;
+
+        const float newMix = juce::jlimit(
+            0.0f, 1.0f, oldMix + amount);
+
+        result.changed =
+            std::abs(newMix - oldMix) > 0.0001f;
 
         if (result.changed)
             effect.setProperty("mix", newMix, nullptr);
@@ -552,7 +602,10 @@ FXCommandResult FXCommandEngine::execute(
 
     if (isAddCommand(text) || isExactEffectName(text))
     {
-        result.changed = addEffect(result.rackState, *definition);
+        result.changed = addEffect(
+            result.rackState,
+            *definition);
+
         result.success = result.changed;
         result.summary = result.changed
             ? "Added " + effectName + " to the rack."
