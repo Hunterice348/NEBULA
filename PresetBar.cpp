@@ -30,6 +30,8 @@ PresetBar::PresetBar(PresetManager& pm)
     delBtn.setButtonText("DEL");
 
     dataBtn.setTooltip("Choose the NEBULA user data location");
+    saveBtn.setTooltip("Save your current sound as a new user preset");
+    delBtn.setTooltip("Delete the selected user preset");
 
     const auto cyan = juce::Colour(0xFF00E5FF);
     const auto background = juce::Colour(0xFF0A0E1A);
@@ -193,7 +195,15 @@ void PresetBar::comboBoxChanged(
     if (name.isNotEmpty()
         && name != presetManager.getCurrentPresetName())
     {
-        presetManager.loadPreset(name);
+        const bool loaded =
+            presetManager.loadPreset(name);
+
+        if (!loaded)
+        {
+            showStorageMessage(
+                "Preset Error",
+                "NEBULA could not load this preset.");
+        }
     }
 }
 
@@ -227,24 +237,24 @@ void PresetBar::buttonClicked(
 }
 
 // ============================================================
-// SAVE DIALOG
+// SAVE CUSTOM PRESET
 // ============================================================
 
 void PresetBar::showSaveDialog()
 {
     auto window =
         std::make_shared<juce::AlertWindow>(
-            "Save Preset",
-            "Enter a preset name:",
+            "Create User Preset",
+            "Save your current NEBULA sound as a preset.",
             juce::MessageBoxIconType::NoIcon);
 
     window->addTextEditor(
         "name",
         "My Preset",
-        "Name:");
+        "Preset name:");
 
     window->addButton(
-        "Save",
+        "Save Preset",
         1,
         juce::KeyPress(juce::KeyPress::returnKey));
 
@@ -266,8 +276,34 @@ void PresetBar::showSaveDialog()
                 const auto name =
                     window->getTextEditorContents("name").trim();
 
-                if (name.isNotEmpty())
+                if (name.isEmpty())
+                {
+                    safeThis->showStorageMessage(
+                        "Invalid Preset Name",
+                        "Please enter a name for your preset.");
+
+                    return;
+                }
+
+                const bool saved =
                     safeThis->presetManager.savePreset(name);
+
+                if (saved)
+                {
+                    safeThis->showStorageMessage(
+                        "Preset Created",
+                        "Your custom preset was saved successfully:\n\n"
+                        + name
+                        + "\n\nIt is now available in the User preset list.");
+                }
+                else
+                {
+                    safeThis->showStorageMessage(
+                        "Preset Save Failed",
+                        "NEBULA could not save this preset.\n\n"
+                        "Check the preset name and data folder permissions.\n"
+                        "Factory preset names cannot be used.");
+                }
             }),
         false);
 }
@@ -281,8 +317,16 @@ void PresetBar::showDeleteConfirm()
     const auto name =
         presetManager.getCurrentPresetName();
 
-    if (name.isEmpty()
-        || presetManager.isFactoryPreset(name))
+    if (name.isEmpty())
+    {
+        showStorageMessage(
+            "Delete Preset",
+            "No preset is currently selected.");
+
+        return;
+    }
+
+    if (presetManager.isFactoryPreset(name))
     {
         showStorageMessage(
             "Delete Preset",
@@ -299,21 +343,39 @@ void PresetBar::showDeleteConfirm()
                 juce::MessageBoxIconType::QuestionIcon)
             .withTitle("Delete Preset")
             .withMessage("Delete \"" + name + "\"?")
-            .withButton("Delete", 1)
-            .withButton("Cancel", 0),
+            .withButton("Delete")
+            .withButton("Cancel"),
 
         [safeThis, name](int result)
         {
             if (safeThis == nullptr)
                 return;
 
+            // JUCE 8.0.6:
+            // With two buttons, the first button returns 1.
             if (result == 1)
-                safeThis->presetManager.deletePreset(name);
+            {
+                const bool deleted =
+                    safeThis->presetManager.deletePreset(name);
+
+                if (deleted)
+                {
+                    safeThis->showStorageMessage(
+                        "Preset Deleted",
+                        "The user preset was deleted.");
+                }
+                else
+                {
+                    safeThis->showStorageMessage(
+                        "Delete Failed",
+                        "NEBULA could not delete this preset.");
+                }
+            }
         });
 }
 
 // ============================================================
-// STORAGE MESSAGE
+// GENERAL MESSAGE
 // ============================================================
 
 void PresetBar::showStorageMessage(
@@ -326,7 +388,7 @@ void PresetBar::showStorageMessage(
                 juce::MessageBoxIconType::InfoIcon)
             .withTitle(title)
             .withMessage(message)
-            .withButton("OK", 0));
+            .withButton("OK"));
 }
 
 // ============================================================
@@ -382,7 +444,7 @@ void PresetBar::showStorageChooser()
             if (destination.exists())
             {
                 safeThis->showStorageMessage(
-                    "Folder already exists",
+                    "Folder Already Exists",
                     "The selected parent folder already contains "
                     "a NEBULA directory.\n\n"
                     "Choose another parent folder. "
@@ -397,7 +459,7 @@ void PresetBar::showStorageChooser()
             if (moved)
             {
                 safeThis->showStorageMessage(
-                    "Storage updated",
+                    "Storage Updated",
                     "NEBULA user data has been copied to:\n\n"
                     + destination.getFullPathName()
                     + "\n\nThe previous data folder has been preserved.");
@@ -405,7 +467,7 @@ void PresetBar::showStorageChooser()
             else
             {
                 safeThis->showStorageMessage(
-                    "Storage error",
+                    "Storage Error",
                     "NEBULA could not move the data library.\n\n"
                     "The original data folder has not been deleted. "
                     "Check folder permissions and available disk space.");
