@@ -1,32 +1,52 @@
 
 #include "PresetBar.h"
 
+// ============================================================
+// CONSTRUCTOR
+// ============================================================
+
 PresetBar::PresetBar(PresetManager& pm)
     : presetManager(pm)
 {
     addAndMakeVisible(prevBtn);
     addAndMakeVisible(nextBtn);
+    addAndMakeVisible(dataBtn);
     addAndMakeVisible(saveBtn);
     addAndMakeVisible(delBtn);
     addAndMakeVisible(presetBox);
 
     prevBtn.addListener(this);
     nextBtn.addListener(this);
+    dataBtn.addListener(this);
     saveBtn.addListener(this);
     delBtn.addListener(this);
     presetBox.addListener(this);
 
+    dataBtn.setTooltip(
+        "Choose the NEBULA user data location");
+
+    const auto cyan = juce::Colour(0xFF00E5FF);
+    const auto background = juce::Colour(0xFF0A0E1A);
+
     presetBox.setColour(
         juce::ComboBox::backgroundColourId,
-        juce::Colour(0xFF0A0E1A));
+        background);
 
     presetBox.setColour(
         juce::ComboBox::textColourId,
-        juce::Colour(0xFF00E5FF));
+        cyan);
 
     presetBox.setColour(
         juce::ComboBox::outlineColourId,
         juce::Colour(0x6600E5FF));
+
+    dataBtn.setColour(
+        juce::TextButton::buttonColourId,
+        juce::Colour(0xFF172B3A));
+
+    dataBtn.setColour(
+        juce::TextButton::textColourOffId,
+        cyan);
 
     presetManager.onPresetChanged = [this]()
     {
@@ -42,18 +62,26 @@ PresetBar::PresetBar(PresetManager& pm)
     updatePresetName();
 }
 
+// ============================================================
+// DESTRUCTOR
+// ============================================================
+
 PresetBar::~PresetBar()
 {
-    // Prevent callbacks from accessing a destroyed editor.
     presetManager.onPresetChanged = {};
     presetManager.onPresetListChanged = {};
 
     prevBtn.removeListener(this);
     nextBtn.removeListener(this);
+    dataBtn.removeListener(this);
     saveBtn.removeListener(this);
     delBtn.removeListener(this);
     presetBox.removeListener(this);
 }
+
+// ============================================================
+// PAINT
+// ============================================================
 
 void PresetBar::paint(juce::Graphics& g)
 {
@@ -66,6 +94,10 @@ void PresetBar::paint(juce::Graphics& g)
     g.drawRoundedRectangle(bounds, 4.0f, 1.0f);
 }
 
+// ============================================================
+// RESIZED
+// ============================================================
+
 void PresetBar::resized()
 {
     auto area = getLocalBounds().reduced(3);
@@ -73,15 +105,22 @@ void PresetBar::resized()
     prevBtn.setBounds(area.removeFromLeft(26));
     nextBtn.setBounds(area.removeFromLeft(26));
 
-    area.removeFromLeft(6);
+    area.removeFromLeft(5);
 
-    delBtn.setBounds(area.removeFromRight(50));
+    dataBtn.setBounds(area.removeFromRight(52));
+    area.removeFromRight(4);
+
+    delBtn.setBounds(area.removeFromRight(46));
     saveBtn.setBounds(area.removeFromRight(50));
 
-    area.removeFromRight(6);
+    area.removeFromRight(5);
 
     presetBox.setBounds(area);
 }
+
+// ============================================================
+// REFRESH PRESET LIST
+// ============================================================
 
 void PresetBar::refreshList()
 {
@@ -93,19 +132,21 @@ void PresetBar::refreshList()
 
     presetBox.addSectionHeading("Factory");
 
-    const auto factory = presetManager.getFactoryPresetNames();
+    const auto factory =
+        presetManager.getFactoryPresetNames();
 
-    for (int i = 0; i < factory.size(); ++i)
-        presetBox.addItem(factory[i], id++);
+    for (const auto& name : factory)
+        presetBox.addItem(name, id++);
 
-    const auto user = presetManager.getUserPresetNames();
+    const auto user =
+        presetManager.getUserPresetNames();
 
     if (!user.isEmpty())
     {
         presetBox.addSectionHeading("User");
 
-        for (int i = 0; i < user.size(); ++i)
-            presetBox.addItem(user[i], id++);
+        for (const auto& name : user)
+            presetBox.addItem(name, id++);
     }
 
     updatingBox = false;
@@ -113,11 +154,16 @@ void PresetBar::refreshList()
     updatePresetName();
 }
 
+// ============================================================
+// UPDATE PRESET NAME
+// ============================================================
+
 void PresetBar::updatePresetName()
 {
     updatingBox = true;
 
-    const auto name = presetManager.getCurrentPresetName();
+    const auto name =
+        presetManager.getCurrentPresetName();
 
     presetBox.setText(
         name.isEmpty() ? "<no preset>" : name,
@@ -126,9 +172,14 @@ void PresetBar::updatePresetName()
     updatingBox = false;
 }
 
-void PresetBar::comboBoxChanged(juce::ComboBox* cb)
+// ============================================================
+// COMBO BOX
+// ============================================================
+
+void PresetBar::comboBoxChanged(
+    juce::ComboBox* combo)
 {
-    if (updatingBox || cb != &presetBox)
+    if (updatingBox || combo != &presetBox)
         return;
 
     const auto name = presetBox.getText();
@@ -140,7 +191,12 @@ void PresetBar::comboBoxChanged(juce::ComboBox* cb)
     }
 }
 
-void PresetBar::buttonClicked(juce::Button* button)
+// ============================================================
+// BUTTONS
+// ============================================================
+
+void PresetBar::buttonClicked(
+    juce::Button* button)
 {
     if (button == &prevBtn)
     {
@@ -158,7 +214,15 @@ void PresetBar::buttonClicked(juce::Button* button)
     {
         showDeleteConfirm();
     }
+    else if (button == &dataBtn)
+    {
+        showStorageChooser();
+    }
 }
+
+// ============================================================
+// SAVE DIALOG
+// ============================================================
 
 void PresetBar::showSaveDialog()
 {
@@ -201,18 +265,27 @@ void PresetBar::showSaveDialog()
         true);
 }
 
+// ============================================================
+// DELETE CONFIRMATION
+// ============================================================
+
 void PresetBar::showDeleteConfirm()
 {
-    const auto name = presetManager.getCurrentPresetName();
+    const auto name =
+        presetManager.getCurrentPresetName();
 
-    if (name.isEmpty() || presetManager.isFactoryPreset(name))
+    if (name.isEmpty()
+        || presetManager.isFactoryPreset(name))
+    {
         return;
+    }
 
     juce::Component::SafePointer<PresetBar> safeThis(this);
 
     juce::AlertWindow::showAsync(
         juce::MessageBoxOptions()
-            .withIconType(juce::MessageBoxIconType::QuestionIcon)
+            .withIconType(
+                juce::MessageBoxIconType::QuestionIcon)
             .withTitle("Delete Preset")
             .withMessage("Delete \"" + name + "\"?")
             .withButton("Delete")
@@ -225,5 +298,108 @@ void PresetBar::showDeleteConfirm()
 
             if (result == 1)
                 safeThis->presetManager.deletePreset(name);
+        });
+}
+
+// ============================================================
+// STORAGE MESSAGE
+// ============================================================
+
+void PresetBar::showStorageMessage(
+    const juce::String& title,
+    const juce::String& message)
+{
+    juce::AlertWindow::showAsync(
+        juce::MessageBoxOptions()
+            .withIconType(
+                juce::MessageBoxIconType::InfoIcon)
+            .withTitle(title)
+            .withMessage(message)
+            .withButton("OK"));
+}
+
+// ============================================================
+// STORAGE FOLDER CHOOSER
+// ============================================================
+
+void PresetBar::showStorageChooser()
+{
+    const auto currentRoot =
+        presetManager.getStorageRoot();
+
+    const auto initialLocation =
+        currentRoot.getParentDirectory();
+
+    auto chooser = std::make_shared<juce::FileChooser>(
+        "Select a parent folder for NEBULA data",
+        initialLocation,
+        "*",
+        true);
+
+    juce::Component::SafePointer<PresetBar> safeThis(this);
+
+    chooser->launchAsync(
+        juce::FileBrowserComponent::openMode
+            | juce::FileBrowserComponent::canSelectDirectories,
+
+        [safeThis, chooser](const juce::FileChooser& fileChooser)
+        {
+            if (safeThis == nullptr)
+                return;
+
+            const auto selectedParent =
+                fileChooser.getResult();
+
+            if (!selectedParent.isDirectory())
+                return;
+
+            // The final destination is:
+            // selected folder / NEBULA
+            const auto destination =
+                selectedParent.getChildFile("NEBULA");
+
+            const auto oldLocation =
+                safeThis->presetManager.getStorageRoot();
+
+            if (destination == oldLocation)
+            {
+                safeThis->showStorageMessage(
+                    "NEBULA Storage",
+                    "This is already the active data location.");
+
+                return;
+            }
+
+            if (destination.exists())
+            {
+                safeThis->showStorageMessage(
+                    "Folder already exists",
+                    "The selected parent folder already contains "
+                    "a NEBULA directory.\n\n"
+                    "Choose another parent folder. "
+                    "Existing data will not be overwritten.");
+
+                return;
+            }
+
+            const bool moved =
+                safeThis->presetManager.moveStorageTo(destination);
+
+            if (moved)
+            {
+                safeThis->showStorageMessage(
+                    "Storage updated",
+                    "NEBULA user data has been copied to:\n\n"
+                    + destination.getFullPathName()
+                    + "\n\nThe previous data folder has been preserved.");
+            }
+            else
+            {
+                safeThis->showStorageMessage(
+                    "Storage error",
+                    "NEBULA could not move the data library.\n\n"
+                    "The original data folder has not been deleted. "
+                    "Check folder permissions and available disk space.");
+            }
         });
 }
