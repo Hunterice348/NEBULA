@@ -1,0 +1,80 @@
+
+name: Fix Python Non-Breaking Spaces
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Verify branch
+        run: |
+          if [ "$GITHUB_REF_NAME" != "ci/fix-python-nbsp" ]; then
+            echo "Wrong branch. Aborting."
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Replace NBSP characters
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          total = 0
+          for path in Path("scripts").rglob("*.py"):
+              raw = path.read_bytes()
+              count = raw.count(b"\xc2\xa0")
+              if count:
+                  path.write_bytes(raw.replace(b"\xc2\xa0", b" "))
+                  print(f"{path}: replaced {count}")
+                  total += count
+
+          print(f"Total replacements: {total}")
+          PY
+
+      - name: Compile Python scripts
+        run: python -m compileall -q scripts
+
+      - name: Verify no NBSP remains
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          bad = [
+              str(p) for p in Path("scripts").rglob("*.py")
+              if b"\xc2\xa0" in p.read_bytes()
+          ]
+
+          if bad:
+              print("FAIL:", bad)
+              raise SystemExit(1)
+
+          print("PASS: No NBSP remains.")
+          PY
+
+      - name: Check diff
+        run: git diff --check
+
+      - name: Commit and push fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/
+          if git diff --cached --quiet; then
+            echo "No changes required."
+          else
+            git commit -m "Fix Python non-breaking spaces"
+            git push origin HEAD:ci/fix-python-nbsp
+          fi
