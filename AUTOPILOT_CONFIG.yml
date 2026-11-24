@@ -1,0 +1,77 @@
+{
+  "project": {
+    "name": "NEBULA",
+    "version": "1.0.0",
+    "description": "Autonomous modular music software development system",
+    "language": "C++17",
+    "framework": "JUCE",
+    "juce_version": "8.0.6"
+  },
+  "autopilot": {
+    "enabled": true,
+    "mode": "guarded",
+    "max_cycles": 30,
+    "stop_on_repeated_error": true,
+    "max_repeated_errors": 3,
+    "require_clean_git": true,
+    "allow_main_branch_modifications": false,
+    "automatic_commit": false,
+    "automatic_push": false,
+    "automatic_pull_request": false
+  },
+  "ai": {
+    "enabled": true,
+    "provider": "openai-compatible",
+    "base_url_env": "NEBULA_AI_BASE_URL",
+    "api_key_env": "NEBULA_AI_API_KEY",
+    "model_env": "NEBULA_AI_MODEL",
+    "temperature": 0.1,
+    "timeout_seconds": 120,
+    "max_patch_bytes": 200000
+  },
+  "build": {
+    "enabled": true,
+    "build_directory": "build",
+    "configuration": "Release",
+    "build_vst3": true,
+    "build_standalone": true,
+    "timeout_seconds": 1800
+  },
+  "tests": {
+    "enabled": true,
+    "use_ctest": true,
+    "output_on_failure": true,
+    "timeout_seconds": 900
+  },
+  "audit": {
+    "enabled": true,
+    "scan_cpp": true,
+    "scan_headers": true,
+    "scan_cmake": true,
+    "scan_workflows": true,
+    "check_missing_includes": true,
+    "check_realtime_safety": true,
+    "check_todo": true
+  },
+  "safety": {
+    "protected_paths": [
+      ".git",
+      ".github/workflows",
+      "build",
+      "JUCE",
+      ".env",
+      "secrets"
+    ],
+    "forbid_file_deletion": true,
+    "forbid_force_push": true,
+    "require_patch_validation": true,
+    "require_build_after_repair": true,
+    "require_tests_after_repair": true
+  },
+  "reports": {
+    "directory": "reports",
+    "write_json": true,
+    "write_markdown": true,
+    "keep_history": true
+  }
+}
