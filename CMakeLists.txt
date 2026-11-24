@@ -27,7 +27,6 @@ juce_add_plugin(NEBULA_FX
     BUNDLE_ID "com.hunterice.nebula.fx"
     PLUGIN_MANUFACTURER_CODE Hntr
     PLUGIN_CODE Nfx1
-
     PRODUCT_NAME "NEBULA FX"
     DESCRIPTION "Modular Industrial Audio Effects"
 
@@ -43,17 +42,16 @@ juce_add_plugin(NEBULA_FX
 )
 
 target_sources(NEBULA_FX PRIVATE
-    Source/PluginProcessor.cpp
-    Source/PluginProcessor.h
-    Source/PluginEditor.cpp
-    Source/PluginEditor.h
+    Source/PluginProcessor.cpp
+    Source/PluginProcessor.h
+    Source/PluginEditor.cpp
+    Source/PluginEditor.h
 
-    Source/Core/ParameterSmoothing.cpp
-    Source/Core/ParameterSmoothing.h
+    Source/Core/ParameterSmoothing.cpp
+    Source/Core/ParameterSmoothing.h
 
-    Source/Core/AudioMetering.cpp
-    Source/Core/AudioMetering.h
-)
+    Source/Core/AudioMetering.cpp
+    Source/Core/AudioMetering.h
 )
 
 target_compile_definitions(NEBULA_FX PUBLIC
@@ -65,7 +63,6 @@ target_compile_definitions(NEBULA_FX PUBLIC
 target_link_libraries(NEBULA_FX PRIVATE
     juce::juce_audio_utils
     juce::juce_dsp
-    PUBLIC
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags
     juce::juce_recommended_warning_flags
