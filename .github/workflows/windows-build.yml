@@ -1,1 +1,187 @@
-.
+
+name: NEBULA Windows Build
+
+on:
+  push:
+    branches:
+      - main
+      - "feature/**"
+      - "ai/**"
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nebula-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate project
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate configuration files
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          python -c "import json; json.load(open('AUTOPILOT_CONFIG.yml', encoding='utf-8')); print('AUTOPILOT_CONFIG: OK')"
+          if ($LASTEXITCODE -ne 0) { throw "AUTOPILOT_CONFIG.yml is invalid" }
+
+          python -c "import json; json.load(open('AUTOPILOT_GOALS.yml', encoding='utf-8')); print('AUTOPILOT_GOALS: OK')"
+          if ($LASTEXITCODE -ne 0) { throw "AUTOPILOT_GOALS.yml is invalid" }
+
+      - name: Validate Python scripts
+        shell: pwsh
+        run: |
+          python -m compileall -q scripts
+          if ($LASTEXITCODE -ne 0) {
+            throw "Python syntax validation failed"
+          }
+
+      - name: Check required project files
+        shell: pwsh
+        run: |
+          $required = @(
+            "CMakeLists.txt",
+            "Source/PluginProcessor.cpp",
+            "Source/PluginProcessor.h",
+            "Source/PluginEditor.cpp",
+            "Source/PluginEditor.h",
+            "Tests/DSPTests.cpp"
+          )
+
+          foreach ($file in $required) {
+            if (!(Test-Path $file)) {
+              throw "Missing required file: $file"
+            }
+            Write-Host "FOUND: $file"
+          }
+
+  build:
+    name: Build NEBULA FX
+    runs-on: windows-latest
+    needs: validate
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Configure Visual Studio
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Show build tools
+        shell: pwsh
+        run: |
+          cmake --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "CMake is unavailable"
+          }
+
+          where.exe cl
+          if ($LASTEXITCODE -ne 0) {
+            throw "MSVC compiler is unavailable"
+          }
+
+      - name: Configure CMake and download JUCE
+        shell: pwsh
+        run: |
+          cmake -S . -B build `
+            -G "Visual Studio 17 2022" `
+            -A x64 `
+            -DBUILD_TESTING=ON
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "CMake configuration failed"
+          }
+
+      - name: Compile VST3, Standalone and tests
+        shell: pwsh
+        run: |
+          cmake --build build `
+            --config Release `
+            --parallel 2
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "NEBULA compilation failed"
+          }
+
+      - name: Run automated tests
+        shell: pwsh
+        run: |
+          ctest --test-dir build `
+            -C Release `
+            --output-on-failure
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "NEBULA tests failed"
+          }
+
+      - name: Verify and collect build artifacts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $vst3 = Get-ChildItem `
+            -Path "build" `
+            -Recurse `
+            -Directory `
+            -Filter "*.vst3"
+
+          $standalone = Get-ChildItem `
+            -Path "build" `
+            -Recurse `
+            -File `
+            -Filter "NEBULA FX.exe"
+
+          if (!$vst3) {
+            throw "VST3 plugin was not generated"
+          }
+
+          if (!$standalone) {
+            throw "Standalone application was not generated"
+          }
+
+          New-Item -ItemType Directory -Force -Path "package/VST3" | Out-Null
+          New-Item -ItemType Directory -Force -Path "package/Standalone" | Out-Null
+
+          foreach ($plugin in $vst3) {
+            Copy-Item $plugin.FullName "package/VST3" -Recurse -Force
+            Write-Host "VST3: $($plugin.FullName)"
+          }
+
+          foreach ($app in $standalone) {
+            Copy-Item $app.FullName "package/Standalone" -Force
+            Write-Host "Standalone: $($app.FullName)"
+          }
+
+          "## NEBULA build successful" >> $env:GITHUB_STEP_SUMMARY
+          "VST3 and Standalone artifacts were generated." >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload NEBULA artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: NEBULA-Windows-x64-Release
+          path: package/
+          if-no-files-found: error
+          retention-days: 14
