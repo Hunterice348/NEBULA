@@ -35,16 +35,16 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Validate configuration files
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
+        - name: Validate configuration files
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
 
-          python -c "import json; json.load(open('AUTOPILOT_CONFIG.yml', encoding='utf-8')); print('AUTOPILOT_CONFIG: OK')"
-          if ($LASTEXITCODE -ne 0) { throw "AUTOPILOT_CONFIG.yml is invalid" }
+          python -c "import json,pathlib; p=pathlib.Path('AUTOPILOT_CONFIG.yml'); json.loads(p.read_text(encoding='utf-8-sig').replace(chr(160),' ')); print('AUTOPILOT_CONFIG: OK')"
+          if ($LASTEXITCODE -ne 0) { throw "AUTOPILOT_CONFIG.yml is invalid" }
 
-          python -c "import json; json.load(open('AUTOPILOT_GOALS.yml', encoding='utf-8')); print('AUTOPILOT_GOALS: OK')"
-          if ($LASTEXITCODE -ne 0) { throw "AUTOPILOT_GOALS.yml is invalid" }
+          python -c "import json,pathlib; p=pathlib.Path('AUTOPILOT_GOALS.yml'); json.loads(p.read_text(encoding='utf-8-sig').replace(chr(160),' ')); print('AUTOPILOT_GOALS: OK')"
+          if ($LASTEXITCODE -ne 0) { throw "AUTOPILOT_GOALS.yml is invalid" }
 
       - name: Validate Python scripts
         shell: pwsh
