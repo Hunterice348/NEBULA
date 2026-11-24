@@ -1,6 +1,6 @@
 #pragma once
 
-#include <juce_dsp/juce_dsp.h>
+#include <JuceHeader.h>
 
 #include <algorithm>
 #include <cmath>
@@ -25,9 +25,8 @@ public:
         configuredSampleRate = sanitiseSampleRate(sampleRate);
         configuredRampSeconds = sanitiseRampDuration(seconds);
 
-        // JUCE's reset changes the ramp length without allocating. Restore the
-        // current value and target so changing the duration cannot jump the
-        // parameter or discard an in-progress ramp.
+        // Resetting JUCE's ramp restarts its countdown. Restore the current
+        // value before reapplying the target to avoid a discontinuity.
         smoother.reset(configuredSampleRate, configuredRampSeconds);
         smoother.setCurrentAndTargetValue(currentValue);
         smoother.setTargetValue(targetValue);

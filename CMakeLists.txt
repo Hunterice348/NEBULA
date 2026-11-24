@@ -1,4 +1,3 @@
-
 cmake_minimum_required(VERSION 3.22)
 
 project(NEBULA VERSION 1.0.0 LANGUAGES CXX)
@@ -71,11 +70,27 @@ target_link_libraries(NEBULA_FX PRIVATE
 if(BUILD_TESTING)
     add_executable(NEBULA_CoreTests
         Tests/DSPTests.cpp
+        Source/Core/ParameterSmoothing.cpp
+        Source/Core/AudioMetering.cpp
     )
 
     target_include_directories(NEBULA_CoreTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/Source
     )
+
+    target_compile_definitions(NEBULA_CoreTests PRIVATE
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+    )
+
+    target_link_libraries(NEBULA_CoreTests PRIVATE
+        juce::juce_audio_utils
+        juce::juce_dsp
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags
+    )
+
+    juce_generate_juce_header(NEBULA_CoreTests)
 
     add_test(
         NAME NEBULA_CoreTests
