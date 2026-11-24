@@ -3,9 +3,15 @@ name: NEBULA Windows Build
 
 on:
   push:
-    branches: [main, "feature/**", "ai/**"]
+    branches:
+      - main
+      - "feature/**"
+      - "ai/**"
+
   pull_request:
-    branches: [main]
+    branches:
+      - main
+
   workflow_dispatch:
 
 permissions:
@@ -19,10 +25,13 @@ jobs:
   validate:
     name: Validate
     runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
@@ -30,61 +39,103 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+
           @'
           import json
           from pathlib import Path
 
-          for name in ("AUTOPILOT_CONFIG.yml", "AUTOPILOT_GOALS.yml"):
+          config_files = (
+              "AUTOPILOT_CONFIG.yml",
+              "AUTOPILOT_GOALS.yml",
+          )
+
+          for name in config_files:
               path = Path(name)
+
               if not path.is_file():
-                  raise SystemExit(f"Missing: {name}")
-              data = path.read_text(encoding="utf-8-sig")
-              data = data.replace("\u00a0", " ")
-              json.loads(data)
+                  raise SystemExit(f"[FAIL] Missing configuration: {name}")
+
+              content = path.read_text(encoding="utf-8-sig")
+              content = content.replace("\u00a0", " ")
+
+              try:
+                  json.loads(content)
+              except json.JSONDecodeError as error:
+                  raise SystemExit(
+                      f"[FAIL] Invalid JSON-compatible YAML in {name}: {error}"
+                  )
+
               print(f"[PASS] {name}")
           '@ | Set-Content validate_config.py -Encoding utf8
 
           python validate_config.py
+
           if ($LASTEXITCODE -ne 0) {
             throw "Configuration validation failed"
           }
 
-      - name: Validate Python
+      - name: Validate Python scripts
         shell: pwsh
         run: |
+          if (!(Test-Path "scripts" -PathType Container)) {
+            throw "Missing scripts directory"
+          }
+
           python -m compileall -q scripts
+
           if ($LASTEXITCODE -ne 0) {
             throw "Python validation failed"
           }
 
-      - name: Check source files
+      - name: Validate CMake and source files
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+
           $required = @(
             "CMakeLists.txt",
+
             "Source/PluginProcessor.cpp",
             "Source/PluginProcessor.h",
             "Source/PluginEditor.cpp",
             "Source/PluginEditor.h",
+
             "Source/Core/ParameterSmoothing.cpp",
             "Source/Core/ParameterSmoothing.h",
             "Source/Core/AudioMetering.cpp",
             "Source/Core/AudioMetering.h",
-            "Source/DSP/EffectEngine.cpp",
-            "Source/DSP/EffectEngine.h",
-            "Source/Drum/DrumEngine.cpp",
-            "Source/Drum/DrumEngine.h",
-            "Source/Synth/SynthEngine.cpp",
-            "Source/Synth/SynthEngine.h",
-            "Tests/DSPTests.cpp"
+
+            "Source/DSP/AudioEngine.cpp",
+            "Source/DSP/AudioEngine.h",
+            "Source/DSP/BasicEffects.cpp",
+            "Source/DSP/BasicEffects.h",
+            "Source/DSP/EffectProcessor.cpp",
+            "Source/DSP/EffectProcessor.h",
+
+            "Tests/DSPTests.cpp",
+
+            "AUTOPILOT_CONFIG.yml",
+            "AUTOPILOT_GOALS.yml"
           )
 
           foreach ($file in $required) {
             if (!(Test-Path $file -PathType Leaf)) {
-              throw "Missing source file: $file"
+              throw "Missing required project file: $file"
             }
+
             Write-Host "[PASS] $file"
           }
+
+      - name: Validate repository configuration
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          if (!(Test-Path ".github/workflows" -PathType Container)) {
+            throw "GitHub Actions workflow directory is missing"
+          }
+
+          Write-Host "[PASS] Workflow directory"
 
   build:
     name: Build VST3 and Standalone
@@ -93,37 +144,50 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
 
-      - name: Configure
+      - name: Configure CMake
         shell: pwsh
         run: |
-          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DBUILD_TESTING=ON
+          cmake -S . -B build `
+            -G "Visual Studio 17 2022" `
+            -A x64 `
+            -DBUILD_TESTING=ON
+
           if ($LASTEXITCODE -ne 0) {
-            throw "CMake configure failed"
+            throw "CMake configuration failed"
           }
 
-      - name: Compile
+      - name: Build Release
         shell: pwsh
         run: |
-          cmake --build build --config Release --parallel 2
+          cmake --build build `
+            --config Release `
+            --parallel 2
+
           if ($LASTEXITCODE -ne 0) {
-            throw "Compilation failed"
+            throw "NEBULA compilation failed"
           }
 
-      - name: Test
+      - name: Run DSP tests
         shell: pwsh
         run: |
-          ctest --test-dir build -C Release --output-on-failure --no-tests=error
+          ctest --test-dir build `
+            -C Release `
+            --output-on-failure `
+            --no-tests=error
+
           if ($LASTEXITCODE -ne 0) {
-            throw "Tests failed"
+            throw "DSP tests failed"
           }
 
-      - name: Collect products
+      - name: Collect VST3 and Standalone
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -131,28 +195,42 @@ jobs:
           $plugins = @(
             Get-ChildItem build -Recurse -Directory -Filter "*.vst3"
           )
+
           $apps = @(
             Get-ChildItem build -Recurse -File -Filter "NEBULA FX.exe"
           )
 
           if ($plugins.Count -eq 0) {
-            throw "No VST3 bundle found"
+            throw "VST3 bundle was not found"
           }
+
           if ($apps.Count -eq 0) {
-            throw "No Standalone executable found"
+            throw "NEBULA FX Standalone executable was not found"
           }
 
-          New-Item -ItemType Directory -Force package/VST3 | Out-Null
-          New-Item -ItemType Directory -Force package/Standalone | Out-Null
+          New-Item -ItemType Directory -Force "package/VST3" | Out-Null
+          New-Item -ItemType Directory -Force "package/Standalone" | Out-Null
 
-          foreach ($item in $plugins) {
-            Copy-Item $item.FullName package/VST3 -Recurse -Force
-          }
-          foreach ($item in $apps) {
-            Copy-Item $item.FullName package/Standalone -Force
+          foreach ($plugin in $plugins) {
+            Copy-Item `
+              -Path $plugin.FullName `
+              -Destination "package/VST3" `
+              -Recurse `
+              -Force
           }
 
-      - uses: actions/upload-artifact@v4
+          foreach ($app in $apps) {
+            Copy-Item `
+              -Path $app.FullName `
+              -Destination "package/Standalone" `
+              -Force
+          }
+
+          Write-Host "[PASS] VST3 package collected"
+          Write-Host "[PASS] Standalone package collected"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
         with:
           name: NEBULA-Windows-x64-Release
           path: package/
