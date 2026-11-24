@@ -1,0 +1,194 @@
+
+cmake_minimum_required(VERSION 3.22)
+
+project(NEBULA VERSION 0.4.0 LANGUAGES C CXX)
+
+include(CTest)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+# Keep builds reproducible across Windows and macOS.
+if(APPLE)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS deployment target")
+endif()
+
+if(MSVC)
+    add_compile_options(/permissive- /Zc:__cplusplus)
+endif()
+
+# JUCE is expected as a repository submodule.
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/JUCE/CMakeLists.txt")
+    message(FATAL_ERROR
+        "JUCE submodule is missing. Run: git submodule update --init --recursive")
+endif()
+
+add_subdirectory(JUCE)
+
+# ============================================================
+# NEBULA MULTI FX
+# ============================================================
+
+juce_add_plugin(NebulaMultiFX
+    COMPANY_NAME "LoFiLabs"
+    IS_SYNTH FALSE
+    NEEDS_MIDI_INPUT FALSE
+    NEEDS_MIDI_OUTPUT FALSE
+    PLUGIN_MANUFACTURER_CODE LfLb
+    PLUGIN_CODE NblA
+    FORMATS VST3 Standalone
+    PRODUCT_NAME "NEBULA"
+    PLUGIN_CATEGORY "Fx"
+    VST3_CATEGORIES "Fx"
+    VST3_AUTO_MANIFEST FALSE
+)
+
+target_sources(NebulaMultiFX PRIVATE
+    PluginProcessor.cpp
+    PluginProcessor.h
+
+    Effects.cpp
+    Effects.h
+
+    AdvancedEffects.cpp
+    AdvancedEffects.h
+
+    Rack.cpp
+    Rack.h
+
+    PresetManager.cpp
+    PresetManager.h
+
+    PresetBar.cpp
+    PresetBar.h
+
+    StorageManager.cpp
+    StorageManager.h
+
+    PluginEditor.cpp
+    PluginEditor.h
+
+    NebulaLookAndFeel.cpp
+    NebulaLookAndFeel.h
+
+    ReelComponent.cpp
+    ReelComponent.h
+
+    SpectrumDisplay.cpp
+    SpectrumDisplay.h
+
+    SpectrumFrameQueue.h
+
+    GenerationEngine.cpp
+    GenerationEngine.h
+
+    FXCommandEngine.cpp
+    FXCommandEngine.h
+
+    AIPlan.cpp
+    AIPlan.h
+)
+
+target_compile_features(NebulaMultiFX PRIVATE cxx_std_17)
+
+target_compile_definitions(NebulaMultiFX
+    PUBLIC
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_VST3_CAN_REPLACE_VST2=0
+)
+
+juce_generate_juce_header(NebulaMultiFX)
+
+target_link_libraries(NebulaMultiFX
+    PRIVATE
+        juce::juce_audio_utils
+        juce::juce_dsp
+    PUBLIC
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_lto_flags
+        juce::juce_recommended_warning_flags
+)
+
+# ============================================================
+# NEBULA INSTRUMENT
+# ============================================================
+
+juce_add_plugin(NebulaInstrument
+    COMPANY_NAME "LoFiLabs"
+    IS_SYNTH TRUE
+    NEEDS_MIDI_INPUT TRUE
+    NEEDS_MIDI_OUTPUT FALSE
+    PLUGIN_MANUFACTURER_CODE LfLb
+    PLUGIN_CODE Nbli
+    FORMATS VST3 Standalone
+    PRODUCT_NAME "NEBULA INSTRUMENT"
+    PLUGIN_CATEGORY "Instrument"
+    VST3_CATEGORIES "Instrument" "Synth"
+    VST3_AUTO_MANIFEST FALSE
+)
+
+target_sources(NebulaInstrument PRIVATE
+    Instrument/InstrumentProcessor.cpp
+    Instrument/InstrumentProcessor.h
+    Instrument/InstrumentVoice.cpp
+    Instrument/InstrumentVoice.h
+)
+
+target_compile_features(NebulaInstrument PRIVATE cxx_std_17)
+
+target_compile_definitions(NebulaInstrument
+    PUBLIC
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_VST3_CAN_REPLACE_VST2=0
+)
+
+juce_generate_juce_header(NebulaInstrument)
+
+target_link_libraries(NebulaInstrument
+    PRIVATE
+        juce::juce_audio_utils
+        juce::juce_dsp
+    PUBLIC
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_lto_flags
+        juce::juce_recommended_warning_flags
+)
+
+# ============================================================
+# TESTS
+# ============================================================
+
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+
+    add_executable(
+        SpectrumFrameQueueTests
+        tests/SpectrumFrameQueueTests.cpp
+    )
+
+    target_include_directories(
+        SpectrumFrameQueueTests
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+
+    target_compile_features(
+        SpectrumFrameQueueTests
+        PRIVATE
+            cxx_std_17
+    )
+
+    target_link_libraries(
+        SpectrumFrameQueueTests
+        PRIVATE
+            Threads::Threads
+    )
+
+    add_test(
+        NAME SpectrumFrameQueueTests
+        COMMAND SpectrumFrameQueueTests
+    )
+endif()

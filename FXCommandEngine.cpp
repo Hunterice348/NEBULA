@@ -1,0 +1,620 @@
+#include "FXCommandEngine.h"
+
+#include <array>
+#include <cmath>
+#include <initializer_list>
+
+namespace nebula
+{
+namespace
+{
+    struct EffectDefinition
+    {
+        const char* id;
+        const char* aliases;
+        int parameterCount;
+        float p0;
+        float p1;
+        float p2;
+        float mix;
+    };
+
+    // Keep this table synchronized with Effects.h,
+    // AdvancedEffects.h and AIPlan.cpp.
+    constexpr std::array<EffectDefinition, 18> definitions {{
+        { "reverb", "reverb|reverberation|реверб|реверберация", 3, 0.50f, 0.50f, 0.50f, 0.75f },
+        { "delay", "delay|echo|дилей|эхо", 2, 0.30f, 0.40f, 0.00f, 0.65f },
+        { "distortion", "distortion|дисторшн|искажение|сатурация|overdrive|fuzz", 2, 0.50f, 0.70f, 0.00f, 0.85f },
+        { "chorus", "chorus|хорус", 2, 0.30f, 0.50f, 0.00f, 0.75f },
+        { "phaser", "phaser|фейзер|фазер", 3, 0.30f, 0.50f, 0.40f, 0.70f },
+        { "compressor", "compressor|compression|компрессор|компрессия", 3, 0.50f, 0.50f, 0.50f, 1.00f },
+        { "bitcrusher", "bitcrusher|bit crusher|биткрашер|биткраш", 2, 0.50f, 0.50f, 0.00f, 0.70f },
+        { "filter", "filter|lowpass|highpass|фильтр", 2, 0.50f, 0.30f, 0.00f, 1.00f },
+
+        { "stereo_widener", "stereo widener|stereo_widener|stereo width|расширитель стерео|ширина стерео", 2, 0.75f, 0.50f, 0.00f, 0.70f },
+        { "autopan", "auto pan|autopan|автопан|автопанорама|авто панорама", 2, 0.40f, 0.75f, 0.00f, 0.65f },
+        { "noise_gate", "noise gate|noise_gate|gate|гейт|шумовой гейт", 2, 0.35f, 0.50f, 0.00f, 1.00f },
+        { "transient", "transient shaper|transient|транзиент шейпер|транзиент|атака и сустейн", 2, 0.70f, 0.40f, 0.00f, 0.75f },
+        { "tremolo", "tremolo|тремоло", 2, 0.45f, 0.65f, 0.00f, 0.70f },
+        { "ring_mod", "ring modulator|ring modulation|ring_mod|ring mod|кольцевая модуляция|ринг модулятор", 2, 0.45f, 0.50f, 0.00f, 0.60f },
+        { "comb_filter", "comb filter|comb_filter|гребенчатый фильтр|комб фильтр", 2, 0.35f, 0.55f, 0.00f, 0.55f },
+        { "tape_saturation", "tape saturation|tape_saturation|tape saturator|ленточная сатурация|ленточный перегруз", 2, 0.45f, 0.60f, 0.00f, 0.65f },
+        { "lofi", "lo-fi|lofi|lo fi|лоу фай|лоуфай|лоу-фай", 2, 0.40f, 0.45f, 0.00f, 0.65f },
+        { "haas_delay", "haas delay|haas_delay|haas effect|эффект хааса|хаас задержка", 2, 0.30f, 0.70f, 0.00f, 0.60f }
+    }};
+
+    juce::String normalise(const juce::String& value)
+    {
+        return value.trim().toLowerCase();
+    }
+
+    bool containsAny(
+        const juce::String& text,
+        std::initializer_list<const char*> words)
+    {
+        for (const auto* word : words)
+        {
+            if (text.contains(juce::String(word)))
+                return true;
+        }
+
+        return false;
+    }
+
+    const EffectDefinition* findDefinition(
+        const juce::String& text)
+    {
+        const EffectDefinition* best = nullptr;
+        int bestLength = 0;
+
+        for (const auto& definition : definitions)
+        {
+            juce::StringArray aliases;
+            aliases.addTokens(definition.aliases, "|", "");
+
+            for (const auto& rawAlias : aliases)
+            {
+                const auto alias = rawAlias.trim();
+
+                if (alias.isEmpty() || !text.contains(alias))
+                    continue;
+
+                // Prefer the longest matching alias.
+                // This prevents "Haas Delay" from becoming "Delay".
+                if (alias.length() > bestLength)
+                {
+                    best = &definition;
+                    bestLength = alias.length();
+                }
+            }
+        }
+
+        return best;
+    }
+
+    bool isExactEffectName(const juce::String& text)
+    {
+        for (const auto& definition : definitions)
+        {
+            juce::StringArray aliases;
+            aliases.addTokens(definition.aliases, "|", "");
+
+            for (const auto& alias : aliases)
+            {
+                if (text == alias.trim())
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
+    bool isGenreDescription(const juce::String& text)
+    {
+        return containsAny(text, {
+            "industrial techno", "gothic industrial",
+            "dark ambient", "ambient", "lo-fi hip-hop",
+            "lofi hip hop", "hip-hop", "hip hop",
+            "drum and bass", "dnb", "house",
+            "trance", "cinematic", "experimental",
+            "индастриал", "индастриал техно",
+            "готический индастриал", "дарк эмбиент",
+            "эмбиент", "хип-хоп", "драм-н-бейс",
+            "экспериментальная музыка", "кинематографический"
+        });
+    }
+
+    bool isAddCommand(const juce::String& text)
+    {
+        return containsAny(text, {
+            "add ", "insert ", "create ", "put ",
+            "добавь", "добавить", "вставь", "создай",
+            "поставь", "добавить в рэк"
+        });
+    }
+
+    bool isRemoveCommand(const juce::String& text)
+    {
+        return containsAny(text, {
+            "remove ", "delete ", "drop ",
+            "убери", "удали", "удалить", "убрать",
+            "выкинь", "исключи"
+        });
+    }
+
+    bool isNegativeEffectCommand(const juce::String& text)
+    {
+        if (isGenreDescription(text))
+            return false;
+
+        return containsAny(text, {
+            "without ", "no ", "не добавляй",
+            "без ", "убери "
+        });
+    }
+
+    bool isClearCommand(const juce::String& text)
+    {
+        return containsAny(text, {
+            "clear rack", "clear all", "remove all",
+            "empty rack", "очисти рэк", "очистить рэк",
+            "очисти цепочку", "очистить цепочку",
+            "удали все эффекты", "убери все эффекты"
+        });
+    }
+
+    bool isIncreaseCommand(const juce::String& text)
+    {
+        return containsAny(text, {
+            "stronger", "increase", "more ",
+            "boost", "harder", "louder",
+            "сильнее", "усиль", "увеличь",
+            "больше", "жестче", "жёстче",
+            "мощнее", "подними"
+        });
+    }
+
+    bool isDecreaseCommand(const juce::String& text)
+    {
+        return containsAny(text, {
+            "weaker", "decrease", "less ",
+            "reduce", "softer", "lower",
+            "слабее", "ослабь", "уменьши",
+            "меньше", "мягче", "понизь"
+        });
+    }
+
+    bool isDryCommand(const juce::String& text)
+    {
+        return containsAny(text, {
+            "make it dry", "drier", "less wet",
+            "dry sound", "суше", "сухой звук",
+            "сухое звучание", "убери пространство",
+            "меньше пространства"
+        });
+    }
+
+    bool isWetCommand(const juce::String& text)
+    {
+        return containsAny(text, {
+            "wetter", "more wet", "more space",
+            "больше пространства", "влажнее",
+            "больше реверба", "больше эха"
+        });
+    }
+
+    bool isMoveFirstCommand(const juce::String& text)
+    {
+        return containsAny(text, {
+            "move to first", "move first", "put first",
+            "в начало", "первым", "поставь первым",
+            "перемести в начало"
+        });
+    }
+
+    bool isMoveLastCommand(const juce::String& text)
+    {
+        return containsAny(text, {
+            "move to last", "move last", "put last",
+            "в конец", "последним", "поставь последним",
+            "перемести в конец"
+        });
+    }
+
+    int findEffectIndex(
+        const juce::ValueTree& rack,
+        const juce::String& typeID)
+    {
+        for (int i = 0; i < rack.getNumChildren(); ++i)
+        {
+            if (rack.getChild(i).hasType(typeID))
+                return i;
+        }
+
+        return -1;
+    }
+
+    juce::ValueTree makeDefaultEffect(
+        const EffectDefinition& definition)
+    {
+        juce::ValueTree effect(definition.id);
+
+        effect.setProperty("on", true, nullptr);
+        effect.setProperty("mix", definition.mix, nullptr);
+
+        const std::array<float, 3> values {{
+            definition.p0,
+            definition.p1,
+            definition.p2
+        }};
+
+        for (int i = 0; i < definition.parameterCount; ++i)
+        {
+            effect.setProperty(
+                "p" + juce::String(i),
+                values[static_cast<size_t>(i)],
+                nullptr);
+        }
+
+        return effect;
+    }
+
+    bool addEffect(
+        juce::ValueTree& rack,
+        const EffectDefinition& definition)
+    {
+        constexpr int maximumRackEffects = 16;
+
+        if (rack.getNumChildren() >= maximumRackEffects)
+            return false;
+
+        rack.appendChild(makeDefaultEffect(definition), nullptr);
+        return true;
+    }
+
+    bool removeEffect(
+        juce::ValueTree& rack,
+        const EffectDefinition& definition)
+    {
+        const int index = findEffectIndex(rack, definition.id);
+
+        if (index < 0)
+            return false;
+
+        rack.removeChild(index, nullptr);
+        return true;
+    }
+
+    float readFloat(
+        const juce::ValueTree& tree,
+        const juce::Identifier& property,
+        float fallback)
+    {
+        const float value =
+            static_cast<float>(tree.getProperty(property, fallback));
+
+        if (!std::isfinite(value))
+            return fallback;
+
+        return juce::jlimit(0.0f, 1.0f, value);
+    }
+
+    bool adjustEffect(
+        juce::ValueTree& rack,
+        const EffectDefinition& definition,
+        float direction)
+    {
+        int index = findEffectIndex(rack, definition.id);
+
+        if (index < 0)
+        {
+            if (!addEffect(rack, definition))
+                return false;
+
+            index = rack.getNumChildren() - 1;
+        }
+
+        auto effect = rack.getChild(index);
+
+        if (!effect.isValid())
+            return false;
+
+        // Adjust the second parameter for effects where it represents
+        // feedback, decay, depth, release, tone or width.
+        const juce::String id(definition.id);
+
+        const int parameter =
+            (id == "reverb"
+             || id == "delay"
+             || id == "chorus"
+             || id == "phaser"
+             || id == "compressor"
+             || id == "filter")
+                ? 1
+                : 0;
+
+        const juce::Identifier property(
+            "p" + juce::String(parameter));
+
+        const float oldValue =
+            readFloat(effect, property, 0.5f);
+
+        const float newValue = juce::jlimit(
+            0.0f, 1.0f, oldValue + direction * 0.12f);
+
+        effect.setProperty(property, newValue, nullptr);
+
+        const float oldMix = readFloat(effect, "mix", 1.0f);
+        const float newMix = juce::jlimit(
+            0.0f, 1.0f, oldMix + direction * 0.05f);
+
+        effect.setProperty("mix", newMix, nullptr);
+
+        return std::abs(newValue - oldValue) > 0.0001f
+            || std::abs(newMix - oldMix) > 0.0001f;
+    }
+
+    bool adjustAllMixes(
+        juce::ValueTree& rack,
+        float amount,
+        bool spatialOnly)
+    {
+        bool changed = false;
+
+        for (int i = 0; i < rack.getNumChildren(); ++i)
+        {
+            auto effect = rack.getChild(i);
+            const auto id = effect.getType().toString();
+
+            if (spatialOnly
+                && id != "reverb"
+                && id != "delay"
+                && id != "chorus"
+                && id != "phaser"
+                && id != "haas_delay")
+                continue;
+
+            const float oldMix = readFloat(effect, "mix", 1.0f);
+            const float newMix = juce::jlimit(
+                0.0f, 1.0f, oldMix + amount);
+
+            if (std::abs(newMix - oldMix) > 0.0001f)
+            {
+                effect.setProperty("mix", newMix, nullptr);
+                changed = true;
+            }
+        }
+
+        return changed;
+    }
+
+    bool moveEffect(
+        juce::ValueTree& rack,
+        const EffectDefinition& definition,
+        bool toBeginning)
+    {
+        const int index = findEffectIndex(rack, definition.id);
+
+        if (index < 0)
+            return false;
+
+        const int target = toBeginning
+            ? 0
+            : rack.getNumChildren() - 1;
+
+        if (index == target)
+            return false;
+
+        auto effect = rack.getChild(index);
+
+        rack.removeChild(index, nullptr);
+        rack.addChild(effect, target, nullptr);
+
+        return true;
+    }
+}
+
+FXCommandResult FXCommandEngine::execute(
+    const juce::String& command,
+    const juce::ValueTree& currentRack)
+{
+    FXCommandResult result;
+
+    if (!currentRack.isValid() || !currentRack.hasType("RACK"))
+    {
+        result.summary = "Invalid rack state.";
+        return result;
+    }
+
+    result.rackState = currentRack.createCopy();
+
+    const auto text = normalise(command);
+
+    if (text.isEmpty())
+    {
+        result.summary = "Enter a command.";
+        return result;
+    }
+
+    if (isClearCommand(text))
+    {
+        result.recognized = true;
+
+        if (result.rackState.getNumChildren() == 0)
+        {
+            result.summary = "The rack is already empty.";
+            return result;
+        }
+
+        result.rackState.removeAllChildren(nullptr);
+        result.success = true;
+        result.changed = true;
+        result.summary = "All effects removed from the rack.";
+        return result;
+    }
+
+    const auto* definition = findDefinition(text);
+
+    // Genre descriptions are handled by GenerationEngine.
+    if (isGenreDescription(text)
+        && !isAddCommand(text)
+        && !isRemoveCommand(text)
+        && !isIncreaseCommand(text)
+        && !isDecreaseCommand(text)
+        && !isDryCommand(text)
+        && !isWetCommand(text)
+        && !isMoveFirstCommand(text)
+        && !isMoveLastCommand(text))
+    {
+        result.summary =
+            "Genre request: passed to GenerationEngine.";
+        return result;
+    }
+
+    if (definition == nullptr)
+    {
+        if (isDryCommand(text) || isWetCommand(text))
+        {
+            result.recognized = true;
+
+            const float amount =
+                isDryCommand(text) ? -0.20f : 0.15f;
+
+            result.changed = adjustAllMixes(
+                result.rackState,
+                amount,
+                true);
+
+            result.success = result.changed;
+            result.summary = result.changed
+                ? (amount < 0.0f
+                    ? "Spatial effects made drier."
+                    : "Spatial effects made wetter.")
+                : "No spatial effects need adjustment.";
+
+            return result;
+        }
+
+        result.summary = "No FX command recognized.";
+        return result;
+    }
+
+    const juce::String effectName(definition->id);
+
+    const bool hasExplicitAction =
+        isAddCommand(text)
+        || isRemoveCommand(text)
+        || isNegativeEffectCommand(text)
+        || isIncreaseCommand(text)
+        || isDecreaseCommand(text)
+        || isDryCommand(text)
+        || isWetCommand(text)
+        || isMoveFirstCommand(text)
+        || isMoveLastCommand(text)
+        || isExactEffectName(text);
+
+    if (!hasExplicitAction)
+    {
+        result.summary = "Not a direct FX command.";
+        return result;
+    }
+
+    result.recognized = true;
+
+    if (isRemoveCommand(text) || isNegativeEffectCommand(text))
+    {
+        result.changed = removeEffect(
+            result.rackState,
+            *definition);
+
+        result.success = result.changed;
+        result.summary = result.changed
+            ? "Removed " + effectName + "."
+            : effectName + " is not in the rack.";
+
+        return result;
+    }
+
+    if (isMoveFirstCommand(text) || isMoveLastCommand(text))
+    {
+        result.changed = moveEffect(
+            result.rackState,
+            *definition,
+            isMoveFirstCommand(text));
+
+        result.success = result.changed;
+        result.summary = result.changed
+            ? "Moved " + effectName + "."
+            : "Effect not found or already in that position.";
+
+        return result;
+    }
+
+    if (isIncreaseCommand(text) || isDecreaseCommand(text))
+    {
+        result.changed = adjustEffect(
+            result.rackState,
+            *definition,
+            isIncreaseCommand(text) ? 1.0f : -1.0f);
+
+        result.success = result.changed;
+        result.summary = result.changed
+            ? "Adjusted " + effectName + "."
+            : "The effect is already at the requested limit.";
+
+        return result;
+    }
+
+    if (isDryCommand(text) || isWetCommand(text))
+    {
+        const int index = findEffectIndex(
+            result.rackState,
+            effectName);
+
+        if (index < 0)
+        {
+            result.summary = effectName + " is not in the rack.";
+            return result;
+        }
+
+        auto effect = result.rackState.getChild(index);
+
+        const float oldMix = readFloat(effect, "mix", 1.0f);
+        const float amount =
+            isDryCommand(text) ? -0.25f : 0.20f;
+
+        const float newMix = juce::jlimit(
+            0.0f, 1.0f, oldMix + amount);
+
+        result.changed =
+            std::abs(newMix - oldMix) > 0.0001f;
+
+        if (result.changed)
+            effect.setProperty("mix", newMix, nullptr);
+
+        result.success = result.changed;
+        result.summary = result.changed
+            ? "Updated wet/dry mix for " + effectName + "."
+            : "Wet/dry mix is already at the requested limit.";
+
+        return result;
+    }
+
+    if (isAddCommand(text) || isExactEffectName(text))
+    {
+        result.changed = addEffect(
+            result.rackState,
+            *definition);
+
+        result.success = result.changed;
+        result.summary = result.changed
+            ? "Added " + effectName + " to the rack."
+            : "Rack limit reached (16 effects).";
+
+        return result;
+    }
+
+    result.summary = "Command not supported.";
+    return result;
+}
+}
