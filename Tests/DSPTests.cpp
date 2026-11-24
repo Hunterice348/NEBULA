@@ -30,11 +30,12 @@ namespace
         NebulaAudioParameters p;
         p.mode = 0;
         p.inputGain = p.outputGain = 1.0f;
-        p.wet = 0.2f;
         engine.setParameters(p);
         std::vector<float> signal(129, 0.25f);
         float* channels[] = { signal.data() };
         engine.processBlock(channels, 1, 3);
+        engine.setParameters(p); // Host-style repeated block parameter snapshot.
+        channels[0] += 3;
         engine.processBlock(channels, 1, 126);
         for (const auto sample : signal)
             if (!near(sample, 0.25f)) return false;
@@ -72,8 +73,12 @@ namespace
         p.drive = 2.0f;
         p.wet = 0.0f;
         engine.setParameters(p);
+        float settleDry[32] {};
+        float* channels[] = { settleDry };
+        engine.processBlock(channels, 1, 32);
+
         float dry[] = { 0.5f };
-        float* channels[] = { dry };
+        channels[0] = dry;
         engine.processBlock(channels, 1, 1);
         if (!near(dry[0], 0.5f)) return false;
 
@@ -83,45 +88,79 @@ namespace
         wet[0] = 0.5f;
         channels[0] = wet;
         engine.processBlock(channels, 1, 64);
-        return std::isfinite(wet[63]) && wet[63] < 0.5f
-            && wet[63] > 0.0f;
+        return std::isfinite(wet[63]) && wet[63] < 0.5f && wet[63] > 0.0f;
     }
 
-    bool testDelayAndReset()
+    bool testDelayAtRatesAndVariableBlocks()
     {
-        NebulaAudioEngine engine;
-        engine.prepare(1000.0, 1, 16);
-        NebulaAudioParameters p;
-        p.mode = 1;
-        p.delaySamples = 2.0f;
-        p.feedback = 0.0f;
-        p.wet = 1.0f;
-        engine.setParameters(p);
-        float signal[] = { 1.0f, 0.0f, 0.0f, 0.0f };
-        float* channels[] = { signal };
-        engine.processBlock(channels, 1, 4);
-        // Wet is smoothed from the default, so repeat after settling it.
-        engine.reset();
-        engine.setParameters(p);
-        float settle[64] {};
-        channels[0] = settle;
-        engine.processBlock(channels, 1, 64);
-        engine.reset();
-        float impulse[] = { 1.0f, 0.0f, 0.0f, 0.0f };
-        channels[0] = impulse;
-        engine.processBlock(channels, 1, 4);
-        return near(impulse[0], 0.0f) && near(impulse[1], 0.0f)
-            && impulse[2] > 0.9f && near(impulse[3], 0.0f);
+        const double rates[] = { 1000.0, 48000.0 };
+        for (const double rate : rates)
+        {
+            NebulaAudioEngine engine;
+            engine.prepare(rate, 1, 17);
+            NebulaAudioParameters p;
+            p.mode = 1;
+            p.delaySamples = std::round(rate * 0.005); // 5 ms at each rate.
+            p.feedback = 0.0f;
+            p.wet = 1.0f;
+            engine.setParameters(p);
+
+            const int settleLength = static_cast<int>(rate * 0.025);
+            std::vector<float> settling(static_cast<std::size_t>(settleLength), 0.0f);
+            float* channels[] = { settling.data() };
+            engine.processBlock(channels, 1, settleLength);
+            engine.reset();
+
+            const int delaySamples = static_cast<int>(p.delaySamples);
+            std::vector<float> impulse(static_cast<std::size_t>(delaySamples + 8), 0.0f);
+            impulse[0] = 1.0f;
+            int offset = 0;
+            const int blockSizes[] = { 1, 3, 11, 5, 23 };
+            std::size_t blockIndex = 0;
+            while (offset < static_cast<int>(impulse.size()))
+            {
+                const int count = std::min(blockSizes[blockIndex++ % 5],
+                                           static_cast<int>(impulse.size()) - offset);
+                channels[0] = impulse.data() + offset;
+                engine.processBlock(channels, 1, count);
+                offset += count;
+            }
+            for (int i = 0; i < static_cast<int>(impulse.size()); ++i)
+            {
+                const float expected = i == delaySamples ? 1.0f : 0.0f;
+                if (!near(impulse[static_cast<std::size_t>(i)], expected, 0.001f))
+                    return false;
+            }
+        }
+        return true;
     }
 
-    bool testSmootherFiniteAndConverges()
+    bool testSmootherConvergesAcrossBlocksWithRepeatedTarget()
     {
         NebulaParameterSmoothing smoother;
         smoother.prepare(1000.0, 0.01);
         smoother.setCurrentAndTarget(0.0f);
         smoother.setTarget(1.0f);
-        for (int i = 0; i < 10; ++i) smoother.getNextValue();
-        return near(smoother.getCurrentValue(), 1.0f);
+        for (int block = 0; block < 4; ++block)
+        {
+            smoother.setTarget(1.0f); // Must not restart the ramp.
+            for (int sample = 0; sample < 2; ++sample)
+                smoother.getNextValue();
+        }
+        return !smoother.isSmoothing() && near(smoother.getCurrentValue(), 1.0f);
+    }
+
+    bool testProductionEffectDryBypass()
+    {
+        NebulaSaturationEffect saturation;
+        saturation.prepare(44100.0, 1);
+        NebulaEffectParameters parameters;
+        parameters.wet = 0.0f;
+        parameters.drive = 10.0f;
+        const float dry = saturation.processSample(0.25f, 0, parameters);
+        parameters.wet = 1.0f;
+        const float wet = saturation.processSample(0.25f, 0, parameters);
+        return near(dry, 0.25f) && std::isfinite(wet) && wet < dry;
     }
 }
 
@@ -133,8 +172,9 @@ int main()
         { "clean mode and variable blocks", testCleanAndVariableBlocks },
         { "mono/stereo and non-finite sanitizing", testMonoStereoAndNonFiniteSanitizing },
         { "dry/wet and parameter update", testDryWetAndParameterUpdate },
-        { "delay and reset lifecycle", testDelayAndReset },
-        { "parameter smoothing", testSmootherFiniteAndConverges }
+        { "delay at multiple sample rates and variable blocks", testDelayAtRatesAndVariableBlocks },
+        { "smoothing convergence across repeated block targets", testSmootherConvergesAcrossBlocksWithRepeatedTarget },
+        { "production effect dry/wet bypass", testProductionEffectDryBypass }
     };
     int failures = 0;
     for (const auto& test : tests)

@@ -1,29 +1,21 @@
-# NEBULA V2 initial audit
+# NEBULA V2 audio foundation audit
 
-Audit target: `feature/nebula-v2-audio-foundation` (repository state inspected on 2026-11-24).
+Audit target: `feature/nebula-v2-audio-foundation`.
 
-## Project structure inspected
+## Baseline inspected
 
-- `CMakeLists.txt`: C++17 project, JUCE `8.0.6` tag, VST3 and Standalone plugin formats, and a minimal test target.
-- `Source/PluginProcessor.{h,cpp}`: JUCE audio processor, APVTS parameters, and a hand-written delay/saturation switch.
-- `Source/PluginEditor.{h,cpp}`: existing resizable UI and attachments for all seven parameters; preserve these controls and IDs.
-- `Source/Core/ParameterSmoothing.{h,cpp}` and `AudioMetering.{h,cpp}`: JUCE smoothing utility and atomic peak/RMS meter.
-- `Sourse/Core/ParameterSmoothing.h`: misspelled legacy directory containing a duplicate, non-ASCII-whitespace version of the smoothing header. It is not referenced by CMake; preserve it during this foundation work.
-- `Tests/DSPTests.cpp`: stand-alone test executable, but tests a local `tanh` helper rather than production DSP.
-- `.github/workflows/windows-build.yml`, `scripts/`, `AUTOPILOT_*.yml`, and `AGENTS.md` were inspected. The workflow's required-file list expects DSP/Drum/Synth files that are absent from this branch, so validation fails before the real build.
+The repository initially contained a JUCE AudioProcessor/APVTS implementation (`Source/PluginProcessor.*`), a resizable editor with seven parameter attachments (`Source/PluginEditor.*`), smoothing and atomic metering utilities (`Source/Core`), a standalone DSP test that only tested a local saturation helper, CMake/JUCE VST3 and Standalone configuration, Windows workflow and Python scripts. The misspelled `Sourse/Core/ParameterSmoothing.h` is legacy and remains untouched. `README.md` and `docs/ARCHITECTURE.md` did not exist before the foundation work.
 
-## Findings and scope
+The Windows workflow's initial required-file list referenced Drum/Synth and effect-engine sources that were not present. CMake's JUCE dependency is declared as the 8.0.6 Git tag; `set(JUCE_VERSION 8.0.6)` is metadata, not a runtime assertion that the fetched source reports that version.
 
-1. CMake sets C++17 and declares JUCE 8.0.6, VST3, and Standalone. It does not declare a JUCE `VERSION` constraint, and the dependency is tag-pinned rather than commit-pinned. The build toolchain and plugin metadata are otherwise configured in CMake. No local build environment is available through the repository tools, so compilation must be verified by CI.
-2. The plug-in's current processing allocates delay vectors in `prepareToPlay` (appropriate), but its processing logic is embedded in the processor, unsmoothed parameters are read once per block, non-finite input samples can enter DSP, and the delay/saturation implementation cannot be tested directly.
-3. Existing tests do not exercise production audio code. CI's source validation names several absent engines, causing it to fail before the real build.
-4. The APVTS IDs and editor attachments are functioning project surface area and will be preserved.
-5. The existing effects are Clean (dry pass-through), mono-per-channel feedback Delay, and tanh Saturation. This task will extract and improve those real DSP modes; it will not claim to implement the full planned effect catalogue.
+## Implemented Stage 2 foundation
 
-## Stages
+- Extracted the production processing path into `NebulaAudioEngine` and concrete delay/saturation DSP classes.
+- Preserved APVTS parameter IDs and editor attachments. APVTS state continues to serialize via JUCE XML.
+- Added sample-rate-aware per-channel delay storage, mono and multichannel engine input, variable callback-size processing, input/output gain, dry/wet, parameter ramps, bounded feedback, and non-finite sample sanitation.
+- Added host bypass pass-through and `EffectProcessor`/`EffectBase` lifecycle and mixing contracts.
+- Replaced helper-only DSP tests with direct tests of production engine/effect code, including repeated-target ramp convergence, multiple delay rates, variable blocks, finite output, and wet/dry behavior.
 
-- Stage 1: complete this baseline audit and preserve scope/constraints.
-- Stage 2: extract production DSP into a reusable, allocation-free-in-process audio engine; smooth controls, sanitize unsafe values, retain existing clean/delay/saturation modes and parameter IDs, and route the plug-in through it.
-- Stage 3: exercise production engine behavior in automated tests and correct CI validation so it checks files present in this project and runs the actual tests/build.
+## Validation status and known gaps
 
-No local build/test result is asserted by this audit. CI remains the required validation path for JUCE/VST3/Standalone builds. The complete NEBULA FX/DRUM/SYNTH feature set and final release gates remain future work.
+The repository write creates code and tests but does not execute CMake, a compiler, CTest, or a Windows workflow. Build and test results must be reported only after those commands actually run. In particular, VST3/Standalone and processor state round-trip are not verified here. The declared 8-channel upper bound is a host-layout guard, not a guarantee every format/host supports every channel arrangement. Full effect chains and the larger NEBULA FX/DRUM/SYNTH roadmap remain unimplemented.

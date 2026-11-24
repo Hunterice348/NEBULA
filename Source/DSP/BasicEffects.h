@@ -1,6 +1,7 @@
 #pragma once
 
 #include "EffectProcessor.h"
+#include <cstddef>
 #include <vector>
 
 class NebulaDelayEffect final : public EffectBase

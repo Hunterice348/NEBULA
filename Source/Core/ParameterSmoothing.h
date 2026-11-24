@@ -22,8 +22,9 @@ public:
 
     void setTarget(float value) noexcept
     {
-        if (!std::isfinite(value))
+        if (!std::isfinite(value) || value == target)
             return;
+
         target = value;
         remaining = rampLength;
         if (remaining <= 1.0)

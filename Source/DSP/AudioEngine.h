@@ -2,7 +2,6 @@
 
 #include "BasicEffects.h"
 #include "../Core/ParameterSmoothing.h"
-#include <vector>
 
 struct NebulaAudioParameters
 {
@@ -16,7 +15,8 @@ struct NebulaAudioParameters
 };
 
 // Reusable mono/multichannel engine. Channel-major buffers are passed through
-// without copying; all storage is established by prepare() off the audio path.
+// without copying. Variable callback sizes are accepted; prepare() allocates
+// effect storage off the audio path.
 class NebulaAudioEngine final
 {
 public:
@@ -33,7 +33,6 @@ public:
 private:
     double sampleRate = 44100.0;
     int preparedChannels = 0;
-    int maximumBlock = 0;
     bool prepared = false;
     int mode = 0;
 

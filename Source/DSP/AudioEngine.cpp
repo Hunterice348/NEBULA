@@ -11,11 +11,12 @@ namespace
     }
 }
 
-void NebulaAudioEngine::prepare(double rate, int channels, int blockSize)
+void NebulaAudioEngine::prepare(double rate, int channels, int maximumBlockSize)
 {
+    (void) maximumBlockSize; // Processing is sample-looped and supports variable blocks.
+    prepared = false;
     sampleRate = std::isfinite(rate) && rate > 0.0 ? rate : 44100.0;
     preparedChannels = std::max(1, channels);
-    maximumBlock = std::max(1, blockSize);
 
     inputGainSmoother.prepare(sampleRate);
     outputGainSmoother.prepare(sampleRate);
@@ -24,14 +25,14 @@ void NebulaAudioEngine::prepare(double rate, int channels, int blockSize)
     feedbackSmoother.prepare(sampleRate);
     delaySmoother.prepare(sampleRate);
 
-    NebulaAudioParameters defaults;
-    setParameters(defaults);
-    inputGainSmoother.setCurrentAndTarget(1.0f);
-    outputGainSmoother.setCurrentAndTarget(1.0f);
+    const NebulaAudioParameters defaults;
+    inputGainSmoother.setCurrentAndTarget(defaults.inputGain);
+    outputGainSmoother.setCurrentAndTarget(defaults.outputGain);
     wetSmoother.setCurrentAndTarget(defaults.wet);
     driveSmoother.setCurrentAndTarget(defaults.drive);
     feedbackSmoother.setCurrentAndTarget(defaults.feedback);
     delaySmoother.setCurrentAndTarget(defaults.delaySamples);
+    mode = defaults.mode;
 
     delay.prepare(sampleRate, preparedChannels);
     saturation.prepare(sampleRate, preparedChannels);
@@ -41,12 +42,11 @@ void NebulaAudioEngine::prepare(double rate, int channels, int blockSize)
 
 void NebulaAudioEngine::release() noexcept
 {
-    // release() is called from JUCE's non-audio resource lifecycle callback.
+    // JUCE calls this from the resource lifecycle, outside processBlock.
+    prepared = false;
     delay = NebulaDelayEffect {};
     saturation = NebulaSaturationEffect {};
     preparedChannels = 0;
-    maximumBlock = 0;
-    prepared = false;
 }
 
 void NebulaAudioEngine::reset() noexcept
