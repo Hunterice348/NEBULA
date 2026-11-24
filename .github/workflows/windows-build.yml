@@ -3,33 +3,26 @@ name: NEBULA Windows Build
 
 on:
   push:
-    branches:
-      - main
-      - "feature/**"
-      - "ai/**"
+    branches: [main, "feature/**", "ai/**"]
   pull_request:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: nebula-windows-${{ github.ref }}
+  group: nebula-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   validate:
-    name: Validate project
+    name: Validate
     runs-on: windows-latest
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
@@ -37,12 +30,24 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          @'
+          import json
+          from pathlib import Path
 
-          python -c "import json,pathlib; json.loads(pathlib.Path('AUTOPILOT_CONFIG.yml').read_text(encoding='utf-8-sig')); print('CONFIG OK')"
-          if ($LASTEXITCODE -ne 0) { throw "Invalid AUTOPILOT_CONFIG.yml" }
+          for name in ("AUTOPILOT_CONFIG.yml", "AUTOPILOT_GOALS.yml"):
+              path = Path(name)
+              if not path.is_file():
+                  raise SystemExit(f"Missing: {name}")
+              data = path.read_text(encoding="utf-8-sig")
+              data = data.replace("\u00a0", " ")
+              json.loads(data)
+              print(f"[PASS] {name}")
+          '@ | Set-Content validate_config.py -Encoding utf8
 
-          python -c "import json,pathlib; json.loads(pathlib.Path('AUTOPILOT_GOALS.yml').read_text(encoding='utf-8-sig')); print('GOALS OK')"
-          if ($LASTEXITCODE -ne 0) { throw "Invalid AUTOPILOT_GOALS.yml" }
+          python validate_config.py
+          if ($LASTEXITCODE -ne 0) {
+            throw "Configuration validation failed"
+          }
 
       - name: Validate Python
         shell: pwsh
@@ -52,106 +57,102 @@ jobs:
             throw "Python validation failed"
           }
 
-      - name: Check project files
+      - name: Check source files
         shell: pwsh
         run: |
-          $files = @(
+          $required = @(
             "CMakeLists.txt",
             "Source/PluginProcessor.cpp",
             "Source/PluginProcessor.h",
             "Source/PluginEditor.cpp",
             "Source/PluginEditor.h",
+            "Source/Core/ParameterSmoothing.cpp",
+            "Source/Core/ParameterSmoothing.h",
+            "Source/Core/AudioMetering.cpp",
+            "Source/Core/AudioMetering.h",
+            "Source/DSP/EffectEngine.cpp",
+            "Source/DSP/EffectEngine.h",
+            "Source/Drum/DrumEngine.cpp",
+            "Source/Drum/DrumEngine.h",
+            "Source/Synth/SynthEngine.cpp",
+            "Source/Synth/SynthEngine.h",
             "Tests/DSPTests.cpp"
           )
 
-          foreach ($file in $files) {
-            if (!(Test-Path $file)) {
-              throw "Missing file: $file"
+          foreach ($file in $required) {
+            if (!(Test-Path $file -PathType Leaf)) {
+              throw "Missing source file: $file"
             }
+            Write-Host "[PASS] $file"
           }
 
   build:
-    name: Build NEBULA FX
+    name: Build VST3 and Standalone
     runs-on: windows-latest
     needs: validate
     timeout-minutes: 60
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v4
 
-      - name: Setup MSVC
-        uses: ilammy/msvc-dev-cmd@v1
+      - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
 
-      - name: Check build tools
+      - name: Configure
         shell: pwsh
         run: |
-          cmake --version
-          if ($LASTEXITCODE -ne 0) { throw "CMake missing" }
-
-          where.exe cl
-          if ($LASTEXITCODE -ne 0) { throw "MSVC missing" }
-
-      - name: Configure project
-        shell: pwsh
-        run: |
-          cmake -S . -B build `
-            -G "Visual Studio 17 2022" `
-            -A x64 `
-            -DBUILD_TESTING=ON
-
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DBUILD_TESTING=ON
           if ($LASTEXITCODE -ne 0) {
-            throw "CMake configuration failed"
+            throw "CMake configure failed"
           }
 
-      - name: Compile VST3 and Standalone
+      - name: Compile
         shell: pwsh
         run: |
-          cmake --build build `
-            --config Release `
-            --parallel 2
-
+          cmake --build build --config Release --parallel 2
           if ($LASTEXITCODE -ne 0) {
             throw "Compilation failed"
           }
 
-      - name: Run tests
+      - name: Test
         shell: pwsh
         run: |
-          ctest --test-dir build `
-            -C Release `
-            --output-on-failure
-
+          ctest --test-dir build -C Release --output-on-failure --no-tests=error
           if ($LASTEXITCODE -ne 0) {
             throw "Tests failed"
           }
 
-      - name: Collect VST3 and Standalone
+      - name: Collect products
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
 
-          $vst3 = Get-ChildItem build -Recurse -Directory -Filter "*.vst3"
-          $app = Get-ChildItem build -Recurse -File -Filter "NEBULA FX.exe"
+          $plugins = @(
+            Get-ChildItem build -Recurse -Directory -Filter "*.vst3"
+          )
+          $apps = @(
+            Get-ChildItem build -Recurse -File -Filter "NEBULA FX.exe"
+          )
 
-          if (!$vst3) { throw "VST3 was not generated" }
-          if (!$app) { throw "Standalone was not generated" }
+          if ($plugins.Count -eq 0) {
+            throw "No VST3 bundle found"
+          }
+          if ($apps.Count -eq 0) {
+            throw "No Standalone executable found"
+          }
 
           New-Item -ItemType Directory -Force package/VST3 | Out-Null
           New-Item -ItemType Directory -Force package/Standalone | Out-Null
 
-          foreach ($item in $vst3) {
+          foreach ($item in $plugins) {
             Copy-Item $item.FullName package/VST3 -Recurse -Force
           }
-
-          foreach ($item in $app) {
+          foreach ($item in $apps) {
             Copy-Item $item.FullName package/Standalone -Force
           }
 
-      - name: Upload build
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: NEBULA-Windows-x64-Release
           path: package/
