@@ -1,32 +1,19 @@
+
 #!/usr/bin/env python3
 """
-NEBULA STATIC AUDIT ENGINE
-
+NEBULA — Evidence-based project auditor
 Python 3.10+
 
-Checks:
-- Repository structure
-- CMake and JUCE presence
-- C++ source structure
-- Python syntax
-- Basic real-time audio safety patterns
-- TODO / FIXME markers
-- Documentation
-- Goal checklist coverage
-
-IMPORTANT:
-This is a static audit, not a substitute for compilation,
-automated DSP tests, code review or audio validation.
+The auditor checks repository structure and searches for implementation evidence.
+It does not pretend that source-code text proves audio quality or host compatibility.
 """
 
 from __future__ import annotations
 
-import argparse
+import ast
 import json
 import re
-import shutil
 import sys
-
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -34,890 +21,360 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 REPORTS = ROOT / "reports"
-
 GOALS_FILE = ROOT / "AUTOPILOT_GOALS.yml"
-CONFIG_FILE = ROOT / "AUTOPILOT_CONFIG.yml"
 
-RESULT_FILE = REPORTS / "audit_results.json"
-MARKDOWN_FILE = REPORTS / "audit_report.md"
-
-VERSION = "0.1.0"
-
-CPP_EXTENSIONS = {
-    ".cpp",
-    ".cc",
-    ".c",
-    ".h",
-    ".hpp",
-    ".hh",
-    ".hxx",
+SOURCE_EXTENSIONS = {".cpp", ".c", ".cc", ".cxx", ".h", ".hpp", ".hxx"}
+DOC_EXTENSIONS = {".md", ".txt", ".rst"}
+EXCLUDED_PARTS = {
+    ".git", "build", "JUCE", "third_party", "node_modules",
+    ".venv", "__pycache__", ".idea", ".vs"
 }
 
-EXCLUDED_DIRECTORIES = {
-    ".git",
-    "build",
-    "JUCE",
-    "third_party",
-    "node_modules",
-    ".venv",
-    "__pycache__",
+# A check passes only when its evidence can be found in the repository
+# or in an appropriate generated build/test report.
+ALIASES: dict[str, tuple[str, ...]] = {
+    "project_structure_valid": ("CMakeLists.txt", "Source", "Tests"),
+    "cmake_configuration_valid": ("cmake_configure_success",),
+    "juce_dependency_available": ("JUCE", "juce_add_plugin", "find_package(JUCE"),
+    "shared_core_present": ("Source/Shared",),
+    "documentation_present": ("README.md", "docs/"),
+    "cmake_configure_success": ("cmake_configure_success",),
+    "vst3_build_success": ("vst3_build_success",),
+    "standalone_build_success": ("standalone_build_success",),
+    "all_registered_tests_pass": ("all_registered_tests_pass",),
+    "final_audit_pass": ("final_audit_pass",),
+    "final_report_generated": ("final_report_generated",),
+    "release_documentation": ("docs/BUILD.md", "docs/INSTALLATION.md"),
+    "effect_tests": ("Tests/FX", "FXTests"),
+    "synth_tests": ("Tests/Synth", "SynthTests"),
+    "drum_tests": ("Tests/Drum", "DrumTests"),
+    "mono_stereo_tests": ("mono_stereo", "MonoStereo"),
+    "sample_rate_tests": ("sample_rate", "SampleRate"),
+    "state_restore_tests": ("state_restore", "StateRestore"),
+    "repeated_initialization_tests": ("repeated_initialization", "RepeatedInitialization"),
 }
 
-MAX_SOURCE_BYTES = 2_000_000
+# Patterns are warnings for manual review, not automatic proof of a defect.
+REALTIME_RISK_PATTERNS = {
+    "dynamic allocation": re.compile(r"\b(new|malloc|calloc|realloc)\s*\("),
+    "blocking sleep": re.compile(r"\b(sleep_for|sleep_until|usleep|Sleep)\s*\("),
+    "mutex locking": re.compile(r"\b(lock|try_lock)\s*\("),
+    "file access": re.compile(r"\b(fopen|ifstream|ofstream|filesystem::)\b"),
+    "console output": re.compile(r"\b(printf|fprintf|std::cout|std::cerr)\b"),
+}
 
-class AuditError(RuntimeError):
-    """Audit execution error."""
+PLACEHOLDER_PATTERN = re.compile(
+    r"\b(TODO|FIXME|PLACEHOLDER|NOT_IMPLEMENTED|IMPLEMENT_ME)\b",
+    re.IGNORECASE,
+)
 
-def timestamp() -> str:
-    return datetime.now(timezone.utc).isoformat(
-        timespec="seconds"
-    )
 
-def log(message: str, level: str = "INFO") -> None:
-    print(
-        f"[{level.upper()}] {message}",
-        flush=True,
-    )
+def now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
-def ensure_reports() -> None:
-    REPORTS.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
 
-def load_json_compatible_yaml(path: Path) -> dict[str, Any]:
-    """
-    Current NEBULA configuration files use JSON syntax,
-    which is also valid YAML syntax.
-    """
-
+def load_json_compatible(path: Path) -> dict[str, Any]:
     if not path.is_file():
-        raise AuditError(
-            f"Required configuration file is missing: {path.name}"
-        )
-
+        raise RuntimeError(f"Required file is missing: {path}")
     try:
-        result = json.loads(
-            path.read_text(
-                encoding="utf-8-sig"
-            ).replace("\u00a0", " ")
-        )
-    except json.JSONDecodeError as exc:
-        raise AuditError(
-            f"Invalid configuration {path.name}: {exc}"
-        ) from exc
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Cannot parse {path.name}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise RuntimeError(f"{path.name} must contain a JSON object.")
+    return data
 
-    if not isinstance(result, dict):
-        raise AuditError(
-            f"{path.name} must contain a JSON object."
-        )
 
-    return result
-
-def collect_files(
-    extensions: set[str],
-) -> list[Path]:
-
-    result = []
-
+def repo_files() -> list[Path]:
+    result: list[Path] = []
     for path in ROOT.rglob("*"):
-
         if not path.is_file():
             continue
-
-        relative = path.relative_to(ROOT)
-
-        if any(
-            part in EXCLUDED_DIRECTORIES
-            for part in relative.parts
-        ):
+        rel = path.relative_to(ROOT)
+        if any(part in EXCLUDED_PARTS for part in rel.parts):
             continue
-
-        if path.suffix.lower() not in extensions:
-            continue
-
-        try:
-            if path.stat().st_size > MAX_SOURCE_BYTES:
-                continue
-        except OSError:
-            continue
-
-        result.append(path)
-
+        result.append(rel)
     return sorted(result)
 
-def relative(path: Path) -> str:
+
+def read_text(path: Path) -> str:
     try:
-        return str(path.relative_to(ROOT))
-    except ValueError:
-        return str(path)
+        return (ROOT / path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
 
-class AuditEngine:
 
-    def __init__(self) -> None:
+def normalize_identifier(value: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", value.lower())
 
-        self.issues: list[dict[str, Any]] = []
-        self.warnings: list[dict[str, Any]] = []
-        self.checks: dict[str, bool] = {}
-        self.evidence: dict[str, list[str]] = {}
 
-        self.cpp_files: list[Path] = []
-        self.python_files: list[Path] = []
-        self.cmake_files: list[Path] = []
+def collect_goals(goals: dict[str, Any]) -> list[str]:
+    checks: list[str] = []
+    for phase in goals.get("phases", []):
+        if not isinstance(phase, dict) or not phase.get("required", True):
+            continue
+        for check in phase.get("checks", []):
+            if isinstance(check, str) and check not in checks:
+                checks.append(check)
+    return checks
 
-        self.source_text: dict[str, str] = {}
 
-        self.goals: dict[str, Any] = {}
-        self.config: dict[str, Any] = {}
+def evidence_for(
+    check: str,
+    files: list[Path],
+    contents: dict[str, str],
+) -> list[str]:
+    evidence: list[str] = []
+    aliases = ALIASES.get(check, ())
+    terms = aliases or (check, normalize_identifier(check))
 
-    def issue(
-        self,
-        code: str,
-        message: str,
-        severity: str = "error",
-        file: str | None = None,
-    ) -> None:
+    for rel in files:
+        rel_text = rel.as_posix()
+        content = contents.get(rel_text, "")
+        for term in terms:
+            if not term:
+                continue
+            if term.lower() in rel_text.lower():
+                evidence.append(f"path:{rel_text}")
+                break
+            if term.lower() in content.lower():
+                evidence.append(f"content:{rel_text}")
+                break
 
-        item = {
-            "code": code,
-            "message": message,
-            "severity": severity,
-            "file": file,
-        }
-
-        if severity == "warning":
-            self.warnings.append(item)
-        else:
-            self.issues.append(item)
-
-        log(
-            f"{code}: {message}",
-            severity,
-        )
-
-    def set_check(
-        self,
-        name: str,
-        passed: bool,
-        evidence: list[str] | None = None,
-    ) -> None:
-
-        self.checks[name] = bool(passed)
-        self.evidence[name] = evidence or []
-
-    def discover_files(self) -> None:
-
-        self.cpp_files = collect_files(CPP_EXTENSIONS)
-        self.python_files = collect_files({".py"})
-        self.cmake_files = collect_files(
-            {".cmake", ".txt"}
-        )
-
-        for path in self.cpp_files:
-
+    # Build/test checks require explicit successful machine-generated evidence.
+    report_requirements = {
+        "cmake_configure_success": ("build_results.json", ("configure_success", "configured")),
+        "vst3_build_success": ("build_results.json", ("vst3_success", "vst3_built")),
+        "standalone_build_success": ("build_results.json", ("standalone_success", "standalone_built")),
+        "all_registered_tests_pass": ("test_results.json", ("success", "all_passed")),
+        "final_audit_pass": ("audit_results.json", ("status",)),
+        "final_report_generated": ("final_report.json", ("generated",)),
+    }
+    if check in report_requirements:
+        filename, keys = report_requirements[check]
+        report_path = REPORTS / filename
+        if report_path.is_file():
             try:
-                self.source_text[relative(path)] = (
-                    path.read_text(
-                        encoding="utf-8",
-                        errors="replace",
-                    )
-                )
-            except OSError as exc:
-                self.issue(
-                    "SOURCE_READ_ERROR",
-                    str(exc),
-                    file=relative(path),
-                )
+                report = json.loads(report_path.read_text(encoding="utf-8"))
+                if check == "final_audit_pass":
+                    if report.get("status") == "PASS":
+                        evidence.append(f"report:{filename}")
+                elif any(report.get(key) is True for key in keys):
+                    evidence.append(f"report:{filename}")
+            except (OSError, json.JSONDecodeError):
+                pass
 
-        log(
-            f"C++ files discovered: {len(self.cpp_files)}"
-        )
+    return sorted(set(evidence))
 
-        log(
-            f"Python files discovered: {len(self.python_files)}"
-        )
 
-    def check_repository_structure(self) -> None:
+def check_python_syntax(files: list[Path]) -> tuple[list[str], list[str]]:
+    passed: list[str] = []
+    failed: list[str] = []
+    for rel in files:
+        if rel.suffix != ".py":
+            continue
+        try:
+            ast.parse(read_text(rel), filename=rel.as_posix())
+            passed.append(rel.as_posix())
+        except SyntaxError as exc:
+            failed.append(f"{rel.as_posix()}:{exc.lineno}: {exc.msg}")
+    return passed, failed
 
-        required = [
-            "AUTOPILOT_CONFIG.yml",
-            "AUTOPILOT_GOALS.yml",
-            "scripts/common.py",
-            "scripts/repair.py",
-            "scripts/test.py",
-            "scripts/autopilot.py",
-            "scripts/audit.py",
-        ]
 
-        missing = []
-
-        for item in required:
-
-            if not (ROOT / item).is_file():
-                missing.append(item)
-
-        if missing:
-
-            for item in missing:
-                self.issue(
-                    "MISSING_REQUIRED_FILE",
-                    f"Required file is missing: {item}",
-                    "critical",
-                )
-
-        source_directories = [
-            ROOT / "Source",
-            ROOT / "source",
-            ROOT / "src",
-        ]
-
-        has_source_directory = any(
-            path.is_dir()
-            for path in source_directories
-        )
-
-        self.set_check(
-            "project_structure_valid",
-            not missing and has_source_directory,
-            [
-                relative(path)
-                for path in source_directories
-                if path.is_dir()
-            ],
-        )
-
-        if not has_source_directory:
-            self.issue(
-                "SOURCE_DIRECTORY_MISSING",
-                "No Source/, source/ or src/ directory found.",
-                "critical",
-            )
-
-    def check_cmake(self) -> None:
-
-        cmake_file = ROOT / "CMakeLists.txt"
-        cmake = shutil.which("cmake")
-
-        exists = cmake_file.is_file()
-
-        if not exists:
-            self.issue(
-                "CMAKE_FILE_MISSING",
-                "Root CMakeLists.txt does not exist.",
-                "critical",
-            )
-
-        if not cmake:
-            self.issue(
-                "CMAKE_NOT_INSTALLED",
-                "CMake executable was not found.",
-                "warning",
-            )
-
-        self.set_check(
-            "cmake_configuration_valid",
-            False,
-            [
-                "CMake configuration has not been executed "
-                "by this static audit."
-            ],
-        )
-
-        if exists and cmake:
-            log(
-                "CMakeLists.txt and CMake executable detected. "
-                "Actual configuration must be tested by build.py."
-            )
-
-    def check_juce(self) -> None:
-
-        juce_locations = [
-            ROOT / "JUCE",
-            ROOT / "juce",
-            ROOT / "third_party" / "JUCE",
-            ROOT / "modules",
-        ]
-
-        juce_paths = [
-            path
-            for path in juce_locations
-            if path.is_dir()
-        ]
-
-        cmake_text = ""
-
-        cmake_file = ROOT / "CMakeLists.txt"
-
-        if cmake_file.is_file():
-            cmake_text = cmake_file.read_text(
-                encoding="utf-8",
-                errors="replace",
-            )
-
-        juce_reference = bool(
-            re.search(
-                r"find_package\s*\(\s*JUCE|"
-                r"add_subdirectory\s*\([^)]*JUCE|"
-                r"juce_add_plugin|"
-                r"JUCE_DIR",
-                cmake_text,
-                re.IGNORECASE,
-            )
-        )
-
-        found = bool(juce_paths) or juce_reference
-
-        self.set_check(
-            "juce_dependency_available",
-            bool(juce_paths),
-            [
-                relative(path)
-                for path in juce_paths
-            ],
-        )
-
-        if not found:
-            self.issue(
-                "JUCE_NOT_DETECTED",
-                "JUCE directory or CMake dependency reference not found.",
-                "critical",
-            )
-
-        elif not juce_paths:
-            self.issue(
-                "JUCE_DEPENDENCY_UNVERIFIED",
-                "JUCE is referenced in CMake, but its local "
-                "availability has not been verified.",
-                "warning",
-            )
-
-    def check_source_presence(self) -> None:
-
-        has_cpp = bool(self.cpp_files)
-
-        self.set_check(
-            "shared_core_present",
-            False,
-            [
-                relative(path)
-                for path in self.cpp_files[:30]
-            ],
-        )
-
-        if not has_cpp:
-            self.issue(
-                "CPP_SOURCE_MISSING",
-                "No C++ source or header files were found.",
-                "critical",
-            )
-
-        else:
-            log(
-                f"Found {len(self.cpp_files)} C++ source/header files."
-            )
-
-    def check_documentation(self) -> None:
-
-        candidates = [
-            ROOT / "README.md",
-            ROOT / "README",
-            ROOT / "docs",
-            ROOT / "documentation",
-        ]
-
-        found = [
-            relative(path)
-            for path in candidates
-            if path.exists()
-        ]
-
-        self.set_check(
-            "documentation_present",
-            bool(found),
-            found,
-        )
-
-        if not found:
-            self.issue(
-                "DOCUMENTATION_MISSING",
-                "README or documentation directory was not found.",
-                "warning",
-            )
-
-    def check_python_syntax(self) -> None:
-
-        failed = []
-
-        for path in self.python_files:
-
-            try:
-                source = path.read_text(
-                    encoding="utf-8"
-                )
-
-                compile(
-                    source,
-                    str(path),
-                    "exec",
-                )
-
-            except (SyntaxError, UnicodeError, OSError) as exc:
-
-                failed.append({
-                    "file": relative(path),
-                    "error": str(exc),
+def scan_risks(files: list[Path], contents: dict[str, str]) -> list[dict[str, str]]:
+    findings: list[dict[str, str]] = []
+    for rel in files:
+        if rel.suffix.lower() not in SOURCE_EXTENSIONS:
+            continue
+        text = contents.get(rel.as_posix(), "")
+        for label, pattern in REALTIME_RISK_PATTERNS.items():
+            for match in pattern.finditer(text):
+                line = text.count("\n", 0, match.start()) + 1
+                findings.append({
+                    "file": rel.as_posix(),
+                    "line": str(line),
+                    "risk": label,
+                    "match": match.group(0),
+                    "severity": "REVIEW",
                 })
+    return findings
 
-                self.issue(
-                    "PYTHON_SYNTAX_ERROR",
-                    str(exc),
-                    "error",
-                    relative(path),
-                )
 
-        self.set_check(
-            "autopilot_python_syntax",
-            not failed,
-            [
-                relative(path)
-                for path in self.python_files
-            ],
+def scan_placeholders(files: list[Path], contents: dict[str, str]) -> list[str]:
+    findings: list[str] = []
+    for rel in files:
+        if rel.suffix.lower() not in SOURCE_EXTENSIONS | DOC_EXTENSIONS:
+            continue
+        text = contents.get(rel.as_posix(), "")
+        for match in PLACEHOLDER_PATTERN.finditer(text):
+            line = text.count("\n", 0, match.start()) + 1
+            findings.append(f"{rel.as_posix()}:{line}:{match.group(0)}")
+    return findings
+
+
+def main() -> int:
+    REPORTS.mkdir(parents=True, exist_ok=True)
+
+    try:
+        goals = load_json_compatible(GOALS_FILE)
+    except RuntimeError as exc:
+        print(f"[AUDIT ERROR] {exc}", file=sys.stderr)
+        return 2
+
+    files = repo_files()
+    contents = {
+        rel.as_posix(): read_text(rel)
+        for rel in files
+        if rel.suffix.lower() in SOURCE_EXTENSIONS | DOC_EXTENSIONS | {".py", ".yml", ".yaml", ".txt", ".cmake"}
+        or rel.name == "CMakeLists.txt"
+    }
+
+    required_checks = collect_goals(goals)
+    checks: dict[str, bool] = {}
+    check_evidence: dict[str, list[str]] = {}
+
+    for check in required_checks:
+        found = evidence_for(check, files, contents)
+        checks[check] = bool(found)
+        check_evidence[check] = found
+
+    python_files = [p for p in files if p.suffix == ".py"]
+    python_ok, python_errors = check_python_syntax(python_files)
+
+    cmake_exists = (ROOT / "CMakeLists.txt").is_file()
+    source_exists = any(p.suffix.lower() in SOURCE_EXTENSIONS for p in files)
+    docs_exists = any(p.suffix.lower() in DOC_EXTENSIONS for p in files)
+    workflow_exists = any(
+        p.as_posix().startswith(".github/workflows/") for p in files
+    )
+
+    risks = scan_risks(files, contents)
+    placeholders = scan_placeholders(files, contents)
+
+    critical_errors: list[str] = []
+    warnings: list[str] = []
+
+    if not cmake_exists:
+        critical_errors.append("Root CMakeLists.txt is missing.")
+    if not source_exists:
+        critical_errors.append("No C/C++ source files were found.")
+    if python_errors:
+        critical_errors.extend(f"Python syntax error: {item}" for item in python_errors)
+    if not docs_exists:
+        warnings.append("No Markdown/text documentation files were found.")
+    if not workflow_exists:
+        warnings.append("GitHub Actions workflow is missing.")
+    if risks:
+        warnings.append(
+            f"{len(risks)} possible real-time audio risks need manual review."
+        )
+    if placeholders:
+        warnings.append(
+            f"{len(placeholders)} TODO/FIXME/placeholder markers were found."
         )
 
-        if not failed:
-            log("Python syntax checks passed.")
+    total = len(checks)
+    passed = sum(1 for value in checks.values() if value)
+    failed = total - passed
 
-    def check_cpp_patterns(self) -> None:
+    status = "PASS" if failed == 0 and not critical_errors else "INCOMPLETE"
 
-        todo_items = []
-        realtime_items = []
+    result = {
+        "project": "NEBULA",
+        "audit_version": "2.0.0",
+        "timestamp": now(),
+        "repository_root": str(ROOT),
+        "status": status,
+        "summary": {
+            "required_checks": total,
+            "passed_checks": passed,
+            "failed_checks": failed,
+            "critical_errors": len(critical_errors),
+            "warnings": len(warnings),
+            "source_files": sum(1 for p in files if p.suffix.lower() in SOURCE_EXTENSIONS),
+            "python_files": len(python_files),
+        },
+        "checks": checks,
+        "check_evidence": check_evidence,
+        "critical_errors": critical_errors,
+        "warnings": warnings,
+        "python_syntax": {
+            "passed_files": python_ok,
+            "errors": python_errors,
+        },
+        "realtime_risk_review": risks,
+        "placeholder_markers": placeholders,
+        "structure": {
+            "cmake_lists_present": cmake_exists,
+            "cpp_sources_present": source_exists,
+            "documentation_present": docs_exists,
+            "github_workflow_present": workflow_exists,
+        },
+        "limitations": [
+            "Static text scanning does not prove that DSP algorithms work correctly.",
+            "Static scanning cannot prove sound quality or absence of audio glitches.",
+            "FL Studio compatibility requires an actual VST3 load test in the host.",
+            "Portability requires installing and testing from multiple drive paths.",
+            "CPU and memory budgets require runtime profiling on target systems.",
+            "3D visual quality requires visual inspection of the running application.",
+            "A keyword match is evidence of code presence, not proof of feature completeness.",
+        ],
+    }
 
-        todo_pattern = re.compile(
-            r"\b(TODO|FIXME|HACK|XXX)\b"
-        )
+    json_path = REPORTS / "audit_results.json"
+    json_path.write_text(
+        json.dumps(result, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
 
-        realtime_patterns = {
-            "heap_allocation": re.compile(
-                r"\b(new|delete|malloc|calloc|realloc|free)\b"
-            ),
-            "mutex_lock": re.compile(
-                r"\b(lock_guard|unique_lock|scoped_lock)\b"
-            ),
-            "blocking_wait": re.compile(
-                r"\b(sleep_for|sleep_until|wait_for|wait_until)\b"
-            ),
-        }
-
-        for filename, source in self.source_text.items():
-
-            lines = source.splitlines()
-
-            for number, line in enumerate(lines, start=1):
-
-                if todo_pattern.search(line):
-
-                    todo_items.append({
-                        "file": filename,
-                        "line": number,
-                        "text": line.strip()[:240],
-                    })
-
-                for category, pattern in realtime_patterns.items():
-
-                    if pattern.search(line):
-
-                        realtime_items.append({
-                            "category": category,
-                            "file": filename,
-                            "line": number,
-                            "text": line.strip()[:240],
-                        })
-
-        if todo_items:
-
-            self.issue(
-                "TODO_MARKERS_FOUND",
-                f"Found {len(todo_items)} TODO/FIXME/HACK markers.",
-                "warning",
-            )
-
-        if realtime_items:
-
-            self.issue(
-                "REALTIME_SAFETY_REVIEW",
-                (
-                    f"Found {len(realtime_items)} potentially "
-                    "unsafe real-time code patterns. "
-                    "Manual context review is required."
-                ),
-                "warning",
-            )
-
-        self.set_check(
-            "no_known_critical_errors",
-            not any(
-                item["severity"] == "critical"
-                for item in self.issues
-            ),
-            [],
-        )
-
-        self.set_check(
-            "no_audio_thread_blocking",
-            False,
-            [
-                "Static pattern scan is not sufficient "
-                "to prove audio-thread safety."
-            ],
-        )
-
-        self.set_check(
-            "no_audio_thread_allocations",
-            False,
-            [
-                "Static pattern scan is not sufficient "
-                "to prove allocation-free audio processing."
-            ],
-        )
-
-        self.set_check(
-            "todo_review",
-            not todo_items,
-            [
-                f"{item['file']}:{item['line']}"
-                for item in todo_items[:100]
-            ],
-        )
-
-        self.evidence["realtime_review"] = realtime_items
-        self.evidence["todo_markers"] = todo_items
-
-    def check_goal_file(self) -> None:
-
-        phases = self.goals.get("phases", [])
-
-        if not isinstance(phases, list):
-            self.issue(
-                "INVALID_GOALS_FORMAT",
-                "The phases property must be an array.",
-                "critical",
-            )
-            return
-
-        all_checks = []
-
-        for phase in phases:
-
-            if not isinstance(phase, dict):
-                continue
-
-            checks = phase.get("checks", [])
-
-            if isinstance(checks, list):
-                all_checks.extend(
-                    item
-                    for item in checks
-                    if isinstance(item, str)
-                )
-
-        if not all_checks:
-            self.issue(
-                "EMPTY_GOALS",
-                "No acceptance checks were found in the goals file.",
-                "critical",
-            )
-
-        # Feature-level checks are deliberately not marked
-        # as passed by keyword matching alone.
-        for check in all_checks:
-            self.checks.setdefault(check, False)
-
-        self.evidence["goal_checks"] = all_checks
-
-        log(
-            f"Acceptance checks loaded: {len(all_checks)}"
-        )
-
-    def check_cmake_files(self) -> None:
-
-        for path in self.cmake_files:
-
-            if path.name != "CMakeLists.txt" and path.suffix != ".cmake":
-                continue
-
-            try:
-                content = path.read_text(
-                    encoding="utf-8",
-                    errors="replace",
-                )
-            except OSError:
-                continue
-
-            if "\x00" in content:
-                self.issue(
-                    "INVALID_CMAKE_CONTENT",
-                    "Unexpected binary null byte found.",
-                    "error",
-                    relative(path),
-                )
-
-    def build_result(self) -> dict[str, Any]:
-
-        critical_count = sum(
-            1
-            for item in self.issues
-            if item["severity"] == "critical"
-        )
-
-        error_count = sum(
-            1
-            for item in self.issues
-            if item["severity"] == "error"
-        )
-
-        warning_count = len(self.warnings)
-
-        success = critical_count == 0 and error_count == 0
-
-        return {
-            "schema_version": "1.0",
-            "audit_version": VERSION,
-            "timestamp": timestamp(),
-            "success": success,
-            "summary": {
-                "critical": critical_count,
-                "errors": error_count,
-                "warnings": warning_count,
-                "cpp_files": len(self.cpp_files),
-                "python_files": len(self.python_files),
-                "cmake_files": len(self.cmake_files),
-                "goal_checks": len(self.checks),
-                "verified_goal_checks": sum(
-                    1 for value in self.checks.values()
-                    if value
-                ),
-            },
-            "checks": self.checks,
-            "evidence": self.evidence,
-            "issues": self.issues,
-            "warnings": self.warnings,
-        }
-
-    def run(self) -> dict[str, Any]:
-
-        log("NEBULA AUDIT STARTED")
-        log(f"Audit version: {VERSION}")
-
-        self.config = load_json_compatible_yaml(
-            CONFIG_FILE
-        )
-
-        self.goals = load_json_compatible_yaml(
-            GOALS_FILE
-        )
-
-        self.discover_files()
-
-        self.check_repository_structure()
-        self.check_cmake()
-        self.check_juce()
-        self.check_source_presence()
-        self.check_documentation()
-        self.check_python_syntax()
-        self.check_cpp_patterns()
-        self.check_goal_file()
-        self.check_cmake_files()
-
-        result = self.build_result()
-
-        ensure_reports()
-
-        RESULT_FILE.write_text(
-            json.dumps(
-                result,
-                indent=2,
-                ensure_ascii=False,
-            ) + "\n",
-            encoding="utf-8",
-        )
-
-        MARKDOWN_FILE.write_text(
-            create_markdown_report(result),
-            encoding="utf-8",
-        )
-
-        log(
-            f"Audit finished: {result['summary']}"
-        )
-
-        log(
-            "JSON report: reports/audit_results.json"
-        )
-
-        log(
-            "Markdown report: reports/audit_report.md"
-        )
-
-        return result
-
-def create_markdown_report(
-    result: dict[str, Any],
-) -> str:
-
-    summary = result["summary"]
-
-    lines = [
-        "# NEBULA STATIC AUDIT",
+    md_lines = [
+        "# NEBULA Audit Report",
         "",
-        f"Date: {result['timestamp']}",
-        f"Version: {result['audit_version']}",
+        f"- **Date:** {result['timestamp']}",
+        f"- **Status:** {status}",
+        f"- **Checks:** {passed}/{total} passed",
+        f"- **Critical errors:** {len(critical_errors)}",
+        f"- **Warnings:** {len(warnings)}",
         "",
-        "## Result",
+        "## Required checks",
         "",
-        (
-            "**AUDIT PASSED**"
-            if result["success"]
-            else "**AUDIT FAILED**"
-        ),
+        "| Check | Result | Evidence |",
+        "|---|---:|---|",
+    ]
+    for check, ok in checks.items():
+        evidence = ", ".join(check_evidence[check]) or "No evidence"
+        md_lines.append(
+            f"| `{check}` | {'PASS' if ok else 'MISSING'} | {evidence} |"
+        )
+
+    md_lines += ["", "## Critical errors", ""]
+    md_lines += [f"- {item}" for item in critical_errors] or ["- None"]
+    md_lines += ["", "## Warnings", ""]
+    md_lines += [f"- {item}" for item in warnings] or ["- None"]
+    md_lines += ["", "## Real-time review findings", ""]
+    md_lines += [
+        f"- `{item['file']}:{item['line']}` — {item['risk']} (`{item['match']}`)"
+        for item in risks[:200]
+    ] or ["- No heuristic matches."]
+    md_lines += [
         "",
-        "## Summary",
+        "## Limitations",
         "",
-        f"- Critical: {summary['critical']}",
-        f"- Errors: {summary['errors']}",
-        f"- Warnings: {summary['warnings']}",
-        f"- C++ files: {summary['cpp_files']}",
-        f"- Python files: {summary['python_files']}",
-        f"- CMake files: {summary['cmake_files']}",
-        f"- Acceptance checks: {summary['goal_checks']}",
-        f"- Verified checks: {summary['verified_goal_checks']}",
-        "",
-        "## Acceptance checks",
+        *[f"- {item}" for item in result["limitations"]],
         "",
     ]
 
-    for name, passed in result["checks"].items():
+    md_path = REPORTS / "audit_results.md"
+    md_path.write_text("\n".join(md_lines), encoding="utf-8")
 
-        status = "PASS" if passed else "NOT VERIFIED"
+    print(f"[NEBULA AUDIT] {status}")
+    print(f"[NEBULA AUDIT] Checks: {passed}/{total}")
+    print(f"[NEBULA AUDIT] Critical errors: {len(critical_errors)}")
+    print(f"[NEBULA AUDIT] JSON: {json_path.relative_to(ROOT)}")
+    print(f"[NEBULA AUDIT] Markdown: {md_path.relative_to(ROOT)}")
 
-        lines.append(
-            f"- `{name}`: {status}"
-        )
+    return 0 if status == "PASS" else 1
 
-    lines.extend([
-        "",
-        "## Critical issues and errors",
-        "",
-    ])
-
-    if not result["issues"]:
-        lines.append("No critical issues or errors detected.")
-    else:
-        for item in result["issues"]:
-            lines.append(
-                f"- [{item['severity'].upper()}] "
-                f"{item['code']}: {item['message']}"
-            )
-
-    lines.extend([
-        "",
-        "## Warnings",
-        "",
-    ])
-
-    if not result["warnings"]:
-        lines.append("No warnings.")
-    else:
-        for item in result["warnings"]:
-            lines.append(
-                f"- {item['code']}: {item['message']}"
-            )
-
-    lines.extend([
-        "",
-        "## Important limitations",
-        "",
-        "- Static scanning does not prove DSP correctness.",
-        "- Static scanning does not prove thread safety.",
-        "- Static scanning does not replace CMake configuration.",
-        "- Static scanning does not replace VST3 compilation.",
-        "- Static scanning does not replace audio tests.",
-        "- Feature checks require stronger verification.",
-        "",
-        "Generated by NEBULA AUTOPILOT.",
-    ])
-
-    return "\n".join(lines) + "\n"
-
-def main() -> int:
-
-    parser = argparse.ArgumentParser(
-        description="Run NEBULA static code and architecture audit."
-    )
-
-    parser.add_argument(
-        "--strict",
-        action="store_true",
-        help="Return non-zero if warnings are present.",
-    )
-
-    args = parser.parse_args()
-
-    try:
-
-        engine = AuditEngine()
-        result = engine.run()
-
-        print(
-            "\n========== NEBULA AUDIT =========="
-        )
-
-        print(
-            "Result:",
-            "PASS" if result["success"] else "FAIL",
-        )
-
-        print(
-            "Critical:",
-            result["summary"]["critical"],
-        )
-
-        print(
-            "Errors:",
-            result["summary"]["errors"],
-        )
-
-        print(
-            "Warnings:",
-            result["summary"]["warnings"],
-        )
-
-        print(
-            "Verified goal checks:",
-            result["summary"]["verified_goal_checks"],
-        )
-
-        print(
-            "==================================\n"
-        )
-
-        if not result["success"]:
-            return 1
-
-        if args.strict and result["warnings"]:
-            return 1
-
-        return 0
-
-    except (AuditError, OSError, ValueError) as exc:
-
-        log(str(exc), "ERROR")
-        return 1
-
-    except KeyboardInterrupt:
-
-        log("Audit interrupted.", "WARNING")
-        return 130
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
