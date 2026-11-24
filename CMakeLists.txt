@@ -43,10 +43,17 @@ juce_add_plugin(NEBULA_FX
 )
 
 target_sources(NEBULA_FX PRIVATE
-    Source/PluginProcessor.cpp
-    Source/PluginProcessor.h
-    Source/PluginEditor.cpp
-    Source/PluginEditor.h
+    Source/PluginProcessor.cpp
+    Source/PluginProcessor.h
+    Source/PluginEditor.cpp
+    Source/PluginEditor.h
+
+    Source/Core/ParameterSmoothing.cpp
+    Source/Core/ParameterSmoothing.h
+
+    Source/Core/AudioMetering.cpp
+    Source/Core/AudioMetering.h
+)
 )
 
 target_compile_definitions(NEBULA_FX PUBLIC
