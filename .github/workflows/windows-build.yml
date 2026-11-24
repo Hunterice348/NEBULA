@@ -27,37 +27,35 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          persist-credentials: false
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-        - name: Validate configuration files
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
+      - name: Validate configuration
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
 
-          python -c "import json,pathlib; p=pathlib.Path('AUTOPILOT_CONFIG.yml'); json.loads(p.read_text(encoding='utf-8-sig').replace(chr(160),' ')); print('AUTOPILOT_CONFIG: OK')"
-          if ($LASTEXITCODE -ne 0) { throw "AUTOPILOT_CONFIG.yml is invalid" }
+          python -c "import json,pathlib; json.loads(pathlib.Path('AUTOPILOT_CONFIG.yml').read_text(encoding='utf-8-sig')); print('CONFIG OK')"
+          if ($LASTEXITCODE -ne 0) { throw "Invalid AUTOPILOT_CONFIG.yml" }
 
-          python -c "import json,pathlib; p=pathlib.Path('AUTOPILOT_GOALS.yml'); json.loads(p.read_text(encoding='utf-8-sig').replace(chr(160),' ')); print('AUTOPILOT_GOALS: OK')"
-          if ($LASTEXITCODE -ne 0) { throw "AUTOPILOT_GOALS.yml is invalid" }
+          python -c "import json,pathlib; json.loads(pathlib.Path('AUTOPILOT_GOALS.yml').read_text(encoding='utf-8-sig')); print('GOALS OK')"
+          if ($LASTEXITCODE -ne 0) { throw "Invalid AUTOPILOT_GOALS.yml" }
 
-      - name: Validate Python scripts
+      - name: Validate Python
         shell: pwsh
         run: |
           python -m compileall -q scripts
           if ($LASTEXITCODE -ne 0) {
-            throw "Python syntax validation failed"
+            throw "Python validation failed"
           }
 
-      - name: Check required project files
+      - name: Check project files
         shell: pwsh
         run: |
-          $required = @(
+          $files = @(
             "CMakeLists.txt",
             "Source/PluginProcessor.cpp",
             "Source/PluginProcessor.h",
@@ -66,11 +64,10 @@ jobs:
             "Tests/DSPTests.cpp"
           )
 
-          foreach ($file in $required) {
+          foreach ($file in $files) {
             if (!(Test-Path $file)) {
-              throw "Missing required file: $file"
+              throw "Missing file: $file"
             }
-            Write-Host "FOUND: $file"
           }
 
   build:
@@ -81,29 +78,23 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          persist-credentials: false
+        uses: actions/checkout@v5
 
-      - name: Configure Visual Studio
+      - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
 
-      - name: Show build tools
+      - name: Check build tools
         shell: pwsh
         run: |
           cmake --version
-          if ($LASTEXITCODE -ne 0) {
-            throw "CMake is unavailable"
-          }
+          if ($LASTEXITCODE -ne 0) { throw "CMake missing" }
 
           where.exe cl
-          if ($LASTEXITCODE -ne 0) {
-            throw "MSVC compiler is unavailable"
-          }
+          if ($LASTEXITCODE -ne 0) { throw "MSVC missing" }
 
-      - name: Configure CMake and download JUCE
+      - name: Configure project
         shell: pwsh
         run: |
           cmake -S . -B build `
@@ -115,7 +106,7 @@ jobs:
             throw "CMake configuration failed"
           }
 
-      - name: Compile VST3, Standalone and tests
+      - name: Compile VST3 and Standalone
         shell: pwsh
         run: |
           cmake --build build `
@@ -123,10 +114,10 @@ jobs:
             --parallel 2
 
           if ($LASTEXITCODE -ne 0) {
-            throw "NEBULA compilation failed"
+            throw "Compilation failed"
           }
 
-      - name: Run automated tests
+      - name: Run tests
         shell: pwsh
         run: |
           ctest --test-dir build `
@@ -134,51 +125,32 @@ jobs:
             --output-on-failure
 
           if ($LASTEXITCODE -ne 0) {
-            throw "NEBULA tests failed"
+            throw "Tests failed"
           }
 
-      - name: Verify and collect build artifacts
+      - name: Collect VST3 and Standalone
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
 
-          $vst3 = Get-ChildItem `
-            -Path "build" `
-            -Recurse `
-            -Directory `
-            -Filter "*.vst3"
+          $vst3 = Get-ChildItem build -Recurse -Directory -Filter "*.vst3"
+          $app = Get-ChildItem build -Recurse -File -Filter "NEBULA FX.exe"
 
-          $standalone = Get-ChildItem `
-            -Path "build" `
-            -Recurse `
-            -File `
-            -Filter "NEBULA FX.exe"
+          if (!$vst3) { throw "VST3 was not generated" }
+          if (!$app) { throw "Standalone was not generated" }
 
-          if (!$vst3) {
-            throw "VST3 plugin was not generated"
+          New-Item -ItemType Directory -Force package/VST3 | Out-Null
+          New-Item -ItemType Directory -Force package/Standalone | Out-Null
+
+          foreach ($item in $vst3) {
+            Copy-Item $item.FullName package/VST3 -Recurse -Force
           }
 
-          if (!$standalone) {
-            throw "Standalone application was not generated"
+          foreach ($item in $app) {
+            Copy-Item $item.FullName package/Standalone -Force
           }
 
-          New-Item -ItemType Directory -Force -Path "package/VST3" | Out-Null
-          New-Item -ItemType Directory -Force -Path "package/Standalone" | Out-Null
-
-          foreach ($plugin in $vst3) {
-            Copy-Item $plugin.FullName "package/VST3" -Recurse -Force
-            Write-Host "VST3: $($plugin.FullName)"
-          }
-
-          foreach ($app in $standalone) {
-            Copy-Item $app.FullName "package/Standalone" -Force
-            Write-Host "Standalone: $($app.FullName)"
-          }
-
-          "## NEBULA build successful" >> $env:GITHUB_STEP_SUMMARY
-          "VST3 and Standalone artifacts were generated." >> $env:GITHUB_STEP_SUMMARY
-
-      - name: Upload NEBULA artifacts
+      - name: Upload build
         uses: actions/upload-artifact@v4
         with:
           name: NEBULA-Windows-x64-Release
