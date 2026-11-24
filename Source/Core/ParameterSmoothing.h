@@ -1,57 +1,87 @@
-
 #pragma once
 
-#include <JuceHeader.h>
 #include <cmath>
 
+// Audio-thread-owned linear ramp. Targets are set and consumed on the audio
+// thread after parameter values have been copied from their atomics.
 class NebulaParameterSmoothing
 {
 public:
-    void prepare(double sampleRate, double rampSeconds = 0.02)
+    void prepare(double sampleRate, double rampSeconds = 0.02) noexcept
     {
-        smoother.reset(
-            juce::jmax(1.0, sampleRate),
-            juce::jmax(0.001, rampSeconds)
-        );
-
-        smoother.setCurrentAndTargetValue(0.0f);
+        const double safeRate = std::isfinite(sampleRate) && sampleRate > 0.0
+            ? sampleRate : 44100.0;
+        const double safeRamp = std::isfinite(rampSeconds) && rampSeconds > 0.0
+            ? rampSeconds : 0.02;
+        rampLength = safeRate * safeRamp;
+        if (rampLength < 1.0)
+            rampLength = 1.0;
+        remaining = 0;
+        step = 0.0f;
     }
 
     void setTarget(float value) noexcept
     {
-        if (std::isfinite(value))
-            smoother.setTargetValue(value);
+        if (!std::isfinite(value))
+            return;
+        target = value;
+        remaining = rampLength;
+        if (remaining <= 1.0)
+        {
+            current = target;
+            remaining = 0;
+            step = 0.0f;
+        }
+        else
+        {
+            step = static_cast<float>((static_cast<double>(target) - current) / remaining);
+        }
     }
 
     void setCurrentAndTarget(float value) noexcept
     {
-        if (std::isfinite(value))
-            smoother.setCurrentAndTargetValue(value);
+        if (!std::isfinite(value))
+            return;
+        current = target = value;
+        remaining = 0;
+        step = 0.0f;
     }
 
     float getNextValue() noexcept
     {
-        return smoother.getNextValue();
+        if (remaining > 0)
+        {
+            current += step;
+            if (--remaining <= 0)
+            {
+                current = target;
+                step = 0.0f;
+            }
+        }
+        return current;
     }
 
-    float getCurrentValue() const noexcept
-    {
-        return smoother.getCurrentValue();
-    }
-
-    bool isSmoothing() const noexcept
-    {
-        return smoother.isSmoothing();
-    }
+    float getCurrentValue() const noexcept { return current; }
+    bool isSmoothing() const noexcept { return remaining > 0; }
 
     void skip(int samples) noexcept
     {
-        smoother.skip(juce::jmax(0, samples));
+        if (samples <= 0 || remaining <= 0)
+            return;
+        const auto count = samples < remaining ? samples : static_cast<int>(remaining);
+        current += step * static_cast<float>(count);
+        remaining -= count;
+        if (remaining <= 0)
+        {
+            current = target;
+            step = 0.0f;
+        }
     }
 
 private:
-    juce::SmoothedValue<
-        float,
-        juce::ValueSmoothingTypes::Linear
-    > smoother;
+    float current = 0.0f;
+    float target = 0.0f;
+    float step = 0.0f;
+    double rampLength = 1.0;
+    double remaining = 0.0;
 };

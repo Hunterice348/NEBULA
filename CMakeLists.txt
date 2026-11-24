@@ -1,4 +1,3 @@
-
 cmake_minimum_required(VERSION 3.22)
 
 project(NEBULA VERSION 1.0.0 LANGUAGES CXX)
@@ -12,6 +11,7 @@ include(FetchContent)
 
 set(JUCE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(JUCE_BUILD_EXTRAS OFF CACHE BOOL "" FORCE)
+set(JUCE_VERSION 8.0.6)
 
 FetchContent_Declare(
     JUCE
@@ -19,7 +19,6 @@ FetchContent_Declare(
     GIT_TAG 8.0.6
     GIT_SHALLOW TRUE
 )
-
 FetchContent_MakeAvailable(JUCE)
 
 juce_add_plugin(NEBULA_FX
@@ -29,14 +28,11 @@ juce_add_plugin(NEBULA_FX
     PLUGIN_CODE Nfx1
     PRODUCT_NAME "NEBULA FX"
     DESCRIPTION "Modular Industrial Audio Effects"
-
     FORMATS VST3 Standalone
-
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT FALSE
     NEEDS_MIDI_OUTPUT FALSE
     IS_MIDI_EFFECT FALSE
-
     EDITOR_WANTS_KEYBOARD_FOCUS TRUE
     COPY_PLUGIN_AFTER_BUILD FALSE
 )
@@ -46,12 +42,16 @@ target_sources(NEBULA_FX PRIVATE
     Source/PluginProcessor.h
     Source/PluginEditor.cpp
     Source/PluginEditor.h
-
     Source/Core/ParameterSmoothing.cpp
     Source/Core/ParameterSmoothing.h
-
     Source/Core/AudioMetering.cpp
     Source/Core/AudioMetering.h
+    Source/DSP/AudioEngine.cpp
+    Source/DSP/AudioEngine.h
+    Source/DSP/BasicEffects.cpp
+    Source/DSP/BasicEffects.h
+    Source/DSP/EffectProcessor.cpp
+    Source/DSP/EffectProcessor.h
 )
 
 target_compile_definitions(NEBULA_FX PUBLIC
@@ -59,7 +59,6 @@ target_compile_definitions(NEBULA_FX PUBLIC
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
 )
-
 target_link_libraries(NEBULA_FX PRIVATE
     juce::juce_audio_utils
     juce::juce_dsp
@@ -71,14 +70,15 @@ target_link_libraries(NEBULA_FX PRIVATE
 if(BUILD_TESTING)
     add_executable(NEBULA_CoreTests
         Tests/DSPTests.cpp
+        Source/DSP/AudioEngine.cpp
+        Source/DSP/BasicEffects.cpp
+        Source/DSP/EffectProcessor.cpp
     )
-
-    target_include_directories(NEBULA_CoreTests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/Source
-    )
-
-    add_test(
-        NAME NEBULA_CoreTests
-        COMMAND NEBULA_CoreTests
-    )
+    target_include_directories(NEBULA_CoreTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+    if(MSVC)
+        target_compile_options(NEBULA_CoreTests PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(NEBULA_CoreTests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME NEBULA_CoreTests COMMAND NEBULA_CoreTests)
 endif()
