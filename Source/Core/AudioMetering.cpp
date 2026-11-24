@@ -1,96 +1,77 @@
+
 #include "AudioMetering.h"
 
 #include <cmath>
 
 void NebulaAudioMetering::prepare(double sampleRate) noexcept
 {
-    currentSampleRate = juce::jmax(1.0, sampleRate);
-    clear();
+    juce::ignoreUnused(sampleRate);
+    clear();
 }
 
 void NebulaAudioMetering::process(
-    const juce::AudioBuffer<float>& buffer) noexcept
+    const juce::AudioBuffer<float>& buffer) noexcept
 {
-    const int channels = buffer.getNumChannels();
-    const int samples = buffer.getNumSamples();
+    const int channels = buffer.getNumChannels();
+    const int samples = buffer.getNumSamples();
 
-    if (channels <= 0 || samples <= 0)
-        return;
+    if (channels <= 0 || samples <= 0)
+        return;
 
-    double sumSquares = 0.0;
-    float maximumPeak = 0.0f;
+    double sumSquares = 0.0;
+    float peak = 0.0f;
 
-    for (int channel = 0; channel < channels; ++channel)
-    {
-        const float* data = buffer.getReadPointer(channel);
+    for (int channel = 0; channel < channels; ++channel)
+    {
+        const float* data = buffer.getReadPointer(channel);
 
-        for (int i = 0; i < samples; ++i)
-        {
-            const float value = data[i];
+        for (int i = 0; i < samples; ++i)
+        {
+            const float value = data[i];
 
-            if (!std::isfinite(value))
-                continue;
+            if (!std::isfinite(value))
+                continue;
 
-            const float magnitude = std::abs(value);
+            peak = juce::jmax(peak, std::abs(value));
+            sumSquares += static_cast<double>(value) * value;
+        }
+    }
 
-            maximumPeak = juce::jmax(
-                maximumPeak,
-                magnitude
-            );
+    const double count =
+        static_cast<double>(channels) * samples;
 
-            sumSquares +=
-                static_cast<double>(value) *
-                static_cast<double>(value);
-        }
-    }
+    const float rms = static_cast<float>(
+        std::sqrt(sumSquares / count)
+    );
 
-    const double totalSamples =
-        static_cast<double>(channels) *
-        static_cast<double>(samples);
-
-    const float rms = static_cast<float>(
-        std::sqrt(sumSquares / totalSamples)
-    );
-
-    peakLevel.store(
-        juce::jlimit(0.0f, 1.0f, maximumPeak),
-        std::memory_order_relaxed
-    );
-
-    rmsLevel.store(
-        juce::jlimit(0.0f, 1.0f, rms),
-        std::memory_order_relaxed
-    );
+    peakLevel.store(juce::jlimit(0.0f, 1.0f, peak),
+                    std::memory_order_relaxed);
+    rmsLevel.store(juce::jlimit(0.0f, 1.0f, rms),
+                   std::memory_order_relaxed);
 }
 
 void NebulaAudioMetering::clear() noexcept
 {
-    peakLevel.store(0.0f, std::memory_order_relaxed);
-    rmsLevel.store(0.0f, std::memory_order_relaxed);
+    peakLevel.store(0.0f, std::memory_order_relaxed);
+    rmsLevel.store(0.0f, std::memory_order_relaxed);
 }
 
 float NebulaAudioMetering::getPeak() const noexcept
 {
-    return peakLevel.load(std::memory_order_relaxed);
+    return peakLevel.load(std::memory_order_relaxed);
 }
 
 float NebulaAudioMetering::getRMS() const noexcept
 {
-    return rmsLevel.load(std::memory_order_relaxed);
+    return rmsLevel.load(std::memory_order_relaxed);
 }
 
 float NebulaAudioMetering::getPeakDb() const noexcept
 {
-    return juce::Decibels::gainToDecibels(
-        getPeak(),
-        -100.0f
-    );
+    return juce::Decibels::gainToDecibels(getPeak(), -100.0f);
 }
 
 float NebulaAudioMetering::getRMSDb() const noexcept
 {
-    return juce::Decibels::gainToDecibels(
-        getRMS(),
-        -100.0f
-    );
+    return juce::Decibels::gainToDecibels(getRMS(), -100.0f);
 }
