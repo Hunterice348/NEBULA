@@ -7,7 +7,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(FetchContent)
 
-# --- JUCE Dependency ---
+# --- JUCE Dependency (Pinned 8.0.6) ---
 set(JUCE_BUILD_EXTRAS OFF CACHE BOOL "" FORCE)
 set(JUCE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(JUCE
@@ -19,11 +19,10 @@ FetchContent_MakeAvailable(JUCE)
 
 # --- SHARED CORE LIBRARY ---
 add_library(NEBULA_Core STATIC
-    Source/Core/ParameterSmoothing.cpp
-    Source/Core/AudioMetering.cpp
     Source/Core/StateManager.cpp
-    # Добавьте сюда все общие файлы: DSP, MIDI, PresetManager и т.д.
+    Source/Core/DSP/Compressor.cpp
 )
+target_include_directories(NEBULA_Core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/Source)
 target_link_libraries(NEBULA_Core PUBLIC
     juce::juce_audio_utils
     juce::juce_dsp
@@ -48,7 +47,7 @@ function(add_nebula_plugin TARGET_NAME PLUGIN_CODE PRODUCT_NAME DESCRIPTION IS_S
         NEEDS_MIDI_INPUT ${NEEDS_MIDI}
         NEEDS_MIDI_OUTPUT ${NEEDS_MIDI}
         EDITOR_WANTS_KEYBOARD_FOCUS TRUE
-        COPY_PLUGIN_AFTER_BUILD TRUE # Удобно для тестов в FL Studio
+        COPY_PLUGIN_AFTER_BUILD TRUE
     )
 
     target_sources(${TARGET_NAME} PRIVATE
@@ -69,8 +68,8 @@ endfunction()
 # --- 1. NEBULA FX ---
 add_nebula_plugin(NEBULA_FX "Nfx1" "NEBULA FX" "Modular Industrial Audio Effects" FALSE FALSE)
 
-# --- 2. NEBULA DRUM ---
-add_nebula_plugin(NEBULA_DRUM "Ndr1" "NEBULA DRUM" "Industrial Drum Machine & Sequencer" TRUE TRUE)
+# --- 2. NEBULA DRUM (Заглушка для полной структуры, добавляется аналогично) ---
+# add_nebula_plugin(NEBULA_DRUM "Ndr1" "NEBULA DRUM" "Industrial Drum Machine" TRUE TRUE)
 
-# --- 3. NEBULA SYNTH ---
-add_nebula_plugin(NEBULA_SYNTH "Nsy1" "NEBULA SYNTH" "Advanced Wavetable & FM Synthesizer" TRUE TRUE)
+# --- 3. NEBULA SYNTH (Заглушка для полной структуры, добавляется аналогично) ---
+# add_nebula_plugin(NEBULA_SYNTH "Nsy1" "NEBULA SYNTH" "Advanced Wavetable Synthesizer" TRUE TRUE)
