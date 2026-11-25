@@ -73,3 +73,5 @@ add_nebula_plugin(NEBULA_FX "Nfx1" "NEBULA FX" "Modular Industrial Audio Effects
 
 # --- 3. NEBULA SYNTH (Заглушка для полной структуры, добавляется аналогично) ---
 # add_nebula_plugin(NEBULA_SYNTH "Nsy1" "NEBULA SYNTH" "Advanced Wavetable Synthesizer" TRUE TRUE)
+# --- 2. NEBULA DRUM ---
+add_nebula_plugin(NEBULA_DRUM "Ndr1" "NEBULA DRUM" "Industrial Drum Machine & Sequencer" TRUE TRUE)
