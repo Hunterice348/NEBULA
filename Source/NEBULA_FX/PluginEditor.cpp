@@ -1,62 +1,105 @@
-#include "PluginProcessor.h"
 #include "PluginEditor.h"
 
-NebulaFXAudioProcessorEditor::NebulaFXAudioProcessorEditor (NebulaFXAudioProcessor& p)
-    : AudioProcessorEditor (&p), audioProcessor (p),
-      apvts(p.apvts) // Предполагается, что у вас есть AudioProcessorValueTreeState
+NebulaFXAudioProcessorEditor::NebulaFXAudioProcessorEditor(NebulaFXAudioProcessor& p)
+    : AudioProcessorEditor(&p), audioProcessor(p)
 {
-    // Включаем масштабирование
+    // 1. Включаем масштабирование окна (Критично для FL Studio)
     setResizable(true, true);
-    
-    // Базовые размеры, будут перезаписаны при restoreState
-    setSize(800, 600);
     setResizeLimits(600, 450, 1600, 1200);
-
-    // Инициализация компонентов (пример)
-    addAndMakeVisible(masterGainKnob);
-    masterGainAttachment.reset(new juce::AudioProcessorValueTreeState::SliderAttachment(apvts, "MASTER_GAIN", masterGainKnob));
     
-    startTimerHz(30); // Для обновления метров
+    // Восстанавливаем размер из StateManager, если он был сохранен
+    setSize(audioProcessor.currentUIWidth, audioProcessor.currentUIHeight);
+
+    // Настройка слайдеров
+    auto setupSlider = [](juce::Slider& s) {
+        s.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+        s.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 80, 20);
+        s.setColour(juce::Slider::rotarySliderFillColourId, juce::Colour(0xFFFF0055)); // Neon Red Accent
+        s.setColour(juce::Slider::rotarySliderOutlineColourId, juce::Colour(0xFF333333));
+        s.setColour(juce::Slider::textBoxTextColourId, juce::Colours::white);
+    };
+
+    setupSlider(thresholdSlider);
+    setupSlider(ratioSlider);
+    setupSlider(attackSlider);
+    setupSlider(releaseSlider);
+    setupSlider(masterGainSlider);
+
+    addAndMakeVisible(thresholdSlider);
+    addAndMakeVisible(ratioSlider);
+    addAndMakeVisible(attackSlider);
+    addAndMakeVisible(releaseSlider);
+    addAndMakeVisible(masterGainSlider);
+
+    thresholdAttachment.reset(new APVTSAttachment(audioProcessor.apvts, "THRESHOLD", thresholdSlider));
+    ratioAttachment.reset(new APVTSAttachment(audioProcessor.apvts, "RATIO", ratioSlider));
+    attackAttachment.reset(new APVTSAttachment(audioProcessor.apvts, "ATTACK", attackSlider));
+    releaseAttachment.reset(new APVTSAttachment(audioProcessor.apvts, "RELEASE", releaseSlider));
+    masterGainAttachment.reset(new APVTSAttachment(audioProcessor.apvts, "MASTER_GAIN", masterGainSlider));
+
+    startTimerHz(30);
 }
 
-void NebulaFXAudioProcessorEditor::paint (juce::Graphics& g)
+NebulaFXAudioProcessorEditor::~NebulaFXAudioProcessorEditor() {}
+
+void NebulaFXAudioProcessorEditor::paint(juce::Graphics& g)
 {
-    // 1. Темный металлический фон (Industrial Gothic)
+    // 1. Глубокий темный металлический фон (Industrial Gothic)
     juce::ColourGradient bgGradient(juce::Colour(0xFF1A1A1A), 0, 0, 
-                                    juce::Colour(0xFF0D0D0D), 0, (float)getHeight(), false);
+                                    juce::Colour(0xFF0A0A0A), 0, (float)getHeight(), false);
     g.setGradientFill(bgGradient);
     g.fillRect(getLocalBounds());
 
-    // 2. "3D" Вдавленная панель для эффектов
-    juce::Rectangle<int> panelArea(20, 20, getWidth() - 40, getHeight() - 40);
-    g.setColour(juce::Colour(0xFF111111));
-    g.fillRoundedRectangle(panelArea.toFloat(), 12.0f);
+    // 2. "3D" Вдавленная основная панель
+    juce::Rectangle<int> panelArea = getLocalBounds().reduced(20);
     
-    // 3D-эффект через тени (внешняя и внутренняя)
-    g.setDropShadow(juce::DropShadow(juce::Colours::black.withAlpha(0.6f), 8, juce::Point<int>(0, 4)));
-    g.fillRoundedRectangle(panelArea.reduced(2).toFloat(), 10.0f);
-    
-    // Неоновая подсветка (Red/Purple/Blue accents)
-    g.setGradientFill(juce::ColourGradient(juce::Colour(0xFFFF0055), 0, 20, 
-                                           juce::Colour(0xFF5500FF), (float)getWidth(), 20, false));
-    g.fillRect(20, 18, getWidth() - 40, 2); // Верхняя акцентная линия
+    // Внешняя тень для эффекта "парения"
+    g.setDropShadow(juce::DropShadow(juce::Colours::black.withAlpha(0.7f), 12, juce::Point<int>(0, 6)));
+    g.fillRoundedRectangle(panelArea.toFloat(), 16.0f);
+
+    // Внутренний градиент для эффекта металлической поверхности
+    juce::ColourGradient metalGradient(juce::Colour(0xFF222222), 0, (float)panelArea.getY(),
+                                       juce::Colour(0xFF111111), 0, (float)panelArea.getBottom(), false);
+    g.setGradientFill(metalGradient);
+    g.fillRoundedRectangle(panelArea.reduced(2).toFloat(), 14.0f);
+
+    // 3. Неоновая акцентная линия сверху (Red/Purple)
+    juce::ColourGradient accentGradient(juce::Colour(0xFFFF0055), (float)panelArea.getX(), 0,
+                                        juce::Colour(0xFF7000FF), (float)panelArea.getRight(), 0, false);
+    g.setGradientFill(accentGradient);
+    g.fillRect(panelArea.getX(), panelArea.getY(), panelArea.getWidth(), 3);
+
+    // 4. Заголовок
+    g.setColour(juce::Colours::white.withAlpha(0.8f));
+    g.setFont(juce::Font(24.0f, juce::Font::bold));
+    g.drawText("NEBULA FX", panelArea.removeFromTop(60), juce::Justification::centred);
 }
 
 void NebulaFXAudioProcessorEditor::resized()
 {
-    // Адаптивная верстка (Responsive Layout)
-    int knobSize = juce::jmin(80, getWidth() / 10);
+    // Responsive Layout: элементы масштабируются пропорционально размеру окна
+    juce::Rectangle<int> area = getLocalBounds().reduced(30, 80);
     
-    // Пример размещения: масштабируется вместе с окном
-    masterGainKnob.setBounds(40, 60, knobSize, knobSize);
-    
-    // Сохраняем текущий размер в процессор для последующего getStateInformation
+    int knobSize = juce::jmin(120, area.getWidth() / 5 - 20);
+    int spacing = (area.getWidth() - (knobSize * 5)) / 6;
+
+    auto placeKnob = [&](juce::Slider& slider, juce::String name) {
+        slider.setBounds(area.removeFromLeft(knobSize));
+        area.removeFromLeft(spacing);
+    };
+
+    placeKnob(thresholdSlider, "Threshold");
+    placeKnob(ratioSlider, "Ratio");
+    placeKnob(attackSlider, "Attack");
+    placeKnob(releaseSlider, "Release");
+    placeKnob(masterGainSlider, "Gain");
+
+    // Сохраняем текущий размер для StateManager (чтобы FL Studio запомнила масштаб)
     audioProcessor.setCurrentUIWidth(getWidth());
     audioProcessor.setCurrentUIHeight(getHeight());
 }
 
-// --- Интеграция с StateManager ---
-void NebulaFXAudioProcessorEditor::saveStateToProcessor() {
-    audioProcessor.setCurrentUIWidth(getWidth());
-    audioProcessor.setCurrentUIHeight(getHeight());
+void NebulaFXAudioProcessorEditor::timerCallback() {
+    // Здесь можно обновлять визуализацию (например, аудио-метры) без нагрузки на CPU
+    repaint();
 }
