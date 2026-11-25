@@ -9,7 +9,6 @@ namespace Nebula {
         static void saveState(juce::AudioProcessorValueTreeState& apvts, juce::MemoryBlock& destData, int currentWidth, int currentHeight) {
             juce::ValueTree root = apvts.copyState();
             
-            // Сохраняем размеры UI для масштабирования
             juce::ValueTree uiState("UIState");
             uiState.setProperty("windowWidth", currentWidth, nullptr);
             uiState.setProperty("windowHeight", currentHeight, nullptr);
@@ -33,11 +32,10 @@ namespace Nebula {
                 if (xmlState && xmlState->hasTagName(apvts.state.getType())) {
                     juce::ValueTree restoredState = juce::ValueTree::fromXml(*xmlState);
                     
-                    // Восстанавливаем размеры UI
                     if (juce::ValueTree ui = restoredState.getChildWithName("UIState"); ui.isValid()) {
                         restoredWidth = ui.getProperty("windowWidth", 800);
                         restoredHeight = ui.getProperty("windowHeight", 600);
-                        restoredState.removeChild(ui, nullptr); // Удаляем, чтобы не мешал APVTS
+                        restoredState.removeChild(ui, nullptr);
                     }
                     
                     apvts.replaceState(restoredState);
